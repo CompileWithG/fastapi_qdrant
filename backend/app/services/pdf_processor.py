@@ -18,13 +18,13 @@ def process_pdf(contents: bytes, filename: str):
                 extracted_text += page.get_text()
     except Exception as e:
         print(f"Error extracting text from {filename}: {e}")
-        return
+        return None, None, None
     extraction_end_time = time.perf_counter()
     extraction_time = extraction_end_time - extraction_start_time
 
     if not extracted_text:
         print(f"No text extracted from {filename}.")
-        return
+        return None, None, None
 
     # --- Step 2: Text Chunking ---
     chunking_start_time = time.perf_counter()
@@ -39,7 +39,7 @@ def process_pdf(contents: bytes, filename: str):
 
     if not chunks:
         print(f"No chunks generated from {filename}.")
-        return
+        return extracted_text, None, None
 
     # --- Step 3: ONNX Quantized Embedding ---
     embedding_start_time = time.perf_counter()
@@ -72,7 +72,7 @@ def process_pdf(contents: bytes, filename: str):
         print(f"Attempted to load '{onnx_file_name}'.")
         print("Ensure 'onnx', 'onnxruntime', 'transformers', 'optimum', and 'sentence-transformers' are installed correctly.")
         print("Also, check internet connection for initial model download and file path/name correctness.")
-        return
+        return extracted_text, chunks, None
     embedding_end_time = time.perf_counter()
     embedding_time = embedding_end_time - embedding_start_time
 
@@ -92,3 +92,4 @@ def process_pdf(contents: bytes, filename: str):
         print(chunks[i])
         print(f"Embedding Preview (first 5 values): {embeddings[i][:5]}...")
         print("-" * 20)
+    return extracted_text, chunks, embeddings
