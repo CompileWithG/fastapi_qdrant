@@ -9,7 +9,8 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 from typing import List, Dict
 from openai import OpenAI
 import json
-
+from google import genai
+from google.genai import types
 class PDFProcessor:
     def __init__(self):
         self.document_embeddings = None
@@ -19,10 +20,7 @@ class PDFProcessor:
         self.qdrant_client = QdrantClient(url="http://localhost:6333")
         self.collection_name = "document_chunks"
         self.retrieved_answers = []
-        self.deepseek_client = OpenAI(
-            api_key="sk-90e085c5767b489faa59bdbac93540de",
-            base_url="https://api.deepseek.com"
-        )
+        self.gemini_client = genai.Client(api_key="AIzaSyB0jvrzZfdNTnJMUPQm1_jJvjGbi1h8Suw")
         
         self._initialize_embedder()
 
@@ -85,7 +83,7 @@ class PDFProcessor:
 
     def store_embeddings_in_qdrant(self):
         """Store document chunks and embeddings in Qdrant"""
-        if not self.chunks or not self.document_embeddings:
+        if self.chunks is None or self.document_embeddings is None:
             raise ValueError("No document chunks or embeddings to store")
         
         self._initialize_qdrant_collection()
@@ -109,7 +107,7 @@ class PDFProcessor:
 
     def search_questions(self, questions: List[str]) -> None:
         """Search each question against Qdrant and store relevant text chunks"""
-        if not questions or not self.question_embeddings:
+        if not questions or self.question_embeddings is None:
             return
         
         self.retrieved_answers = []
@@ -117,22 +115,37 @@ class PDFProcessor:
         for question, embedding in zip(questions, self.question_embeddings):
             search_results = self.qdrant_client.query_points(
                 collection_name=self.collection_name,
-                query_vector=embedding.tolist(),
+                query=embedding.tolist(),
                 limit=3,
                 with_payload=True,
-                with_vectors=False
-            )
-            
-            relevant_chunks = [result.payload['text'] for result in search_results]
+            ).points
+            #print(search_results)
+            relevant_chunks = [
+            result.payload['text']
+            for result in search_results
+            if result.payload and 'text' in result.payload
+    ]
+
+            #print("eroor occuers here")
             self.retrieved_answers.append({
                 'question': question,
                 'context': relevant_chunks
             })
-        
+        #print(self.retrieved_answers)
         print(f"Retrieved context for {len(questions)} questions")
+    def _format_gemini_response(self, answer: str) -> str:
+        """Format Gemini's response to match the desired output format"""
+        # Remove any markdown formatting if present
+        clean_answer = answer.replace("**", "").replace("*", "")
+        
+        # Extract just the first sentence if you want concise answers
+        first_sentence = clean_answer.split('.')[0] + '.' if '.' in clean_answer else clean_answer
+        
+        # Alternatively, keep the full formatted response
+        return first_sentence  # or return clean_answer for full response
 
-    def refine_with_deepseek(self) -> Dict:
-        """Use DeepSeek to generate precise answers from retrieved context"""
+    def refine_with_gemini(self) -> Dict:
+        """Use Gemini to generate precise answers from retrieved context"""
         if not self.retrieved_answers:
             return {"answers": []}
         
@@ -164,28 +177,32 @@ class PDFProcessor:
             - Start with a clear, direct answer
             - Follow with reasoning/justification (marked with "Reasoning:")
             - Cite relevant parts of the context (marked with "Reference:")
-            
-            **Example Response:**
-            "The document specifies a 30-day grace period for payments. 
-            Reasoning: This allows flexibility while maintaining policy continuity. 
-            Reference: Page 12 states 'All policies have a 30-day grace period...'"
             """
-            
-            response = self.deepseek_client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[
-                    {"role": "system", "content": "You are an expert document analyst that provides thorough, evidence-based answers."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=400,
-                stream=False
-            )
-            
-            answer = response.choices[0].message.content
-            final_answers.append(answer)
+
+            try:
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-1.5-pro-latest",  # or "gemini-1.5-flash" for faster responses
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                        max_output_tokens=400,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0)  # Disables extended thinking
+                    )
+                )
+                
+                # Extract the response text
+                answer = response.text
+                
+                # Format the answer to match your desired output style
+                formatted_answer = self._format_gemini_response(answer)
+                final_answers.append(formatted_answer)
+                
+            except Exception as e:
+                print(f"Error generating answer with Gemini: {e}")
+                final_answers.append("The document does not specify.")
         
         return {"answers": final_answers}
+
 
     def process_document(self, document_url: str):
         """Process document through the full pipeline"""
@@ -235,4 +252,4 @@ class PDFProcessor:
         self.process_questions(questions)
         self.search_questions(questions)
         
-        return self.refine_with_deepseek()
+        return self.refine_with_gemini()
