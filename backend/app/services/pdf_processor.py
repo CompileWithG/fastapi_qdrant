@@ -20,6 +20,7 @@ class PDFProcessor:
         self.document_embeddings = None
         self.question_embeddings = None
         self.chunks = None
+        self.final_answers = []
         self.embedder = None
         self.qdrant_client = QdrantClient(url="http://localhost:6333")
         self.collection_name = "document_chunks"
@@ -140,16 +141,7 @@ class PDFProcessor:
             })
         #print(self.retrieved_answers)
         print(f"Retrieved context for {len(questions)} questions")
-    def _format_deepseek_response(self, answer: str) -> str:
-        """Format Gemini's response to match the desired output format"""
-        # Remove any markdown formatting if present
-        clean_answer = answer.replace("**", "").replace("*", "")
-        
-        # Extract just the first sentence if you want concise answers
-        first_sentence = clean_answer.split('.')[0] + '.' if '.' in clean_answer else clean_answer
-        
-        # Alternatively, keep the full formatted response
-        return first_sentence  # or return clean_answer for full response
+    
 
 
 
@@ -192,7 +184,6 @@ class PDFProcessor:
 
         """
 
-        final_answers = []
         try:
             completion = self.client.chat.completions.create(
                 extra_body={},
@@ -200,17 +191,16 @@ class PDFProcessor:
                 messages=[{"role": "user", "content": prompt}]
             )
 
-            print(completion.choices[0].message.content)
-            # Extract the response text
-            answer = completion.text
-            # Format the answer to match your desired output style
-            formatted_answer = self._format_deepseek_response(answer)
-            final_answers.append(formatted_answer)
+            
+            
+            #final_ans fixed
+            formatted_answer = completion.choices[0].message.content
+            self.final_answers.append(formatted_answer)
         except Exception as e:
             print(f"Error generating answer with DeepSeek: {e}")
-            final_answers.append("The document does not specify.")
+            self.final_answers.append("The document does not specify.")
 
-        return {"answers": final_answers}
+        return {"answers": self.final_answers}
 
 
     def process_document(self, document_url: str):
