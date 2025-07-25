@@ -12,11 +12,19 @@ import json
 from dotenv import load_dotenv
 load_dotenv()
 import os
+import time
+
+
 
 
 
 
 class PDFProcessor:
+    def print_elapsed_time(self, message=""):
+        elapsed = time.time() - self.start_time
+        print(f"[+{elapsed:.2f}s] {message}")
+
+
     def __init__(self):
         self.document_embeddings = None
         self.question_embeddings = None
@@ -27,13 +35,14 @@ class PDFProcessor:
         self.collection_name = "document_chunks"
         self.retrieved_answers = []
         self.client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key = os.getenv("API_KEY")
-)
+            base_url="https://openrouter.ai/api/v1",
+            api_key = os.getenv("API_KEY")
+        )
         
         self._initialize_embedder()
 
     def _initialize_embedder(self):
+        self.start_time = time.time()
         """Initialize the ONNX embedding model"""
         try:
             self.embedder = SentenceTransformer(
@@ -42,6 +51,7 @@ class PDFProcessor:
                 backend="onnx",
                 model_kwargs={"file_name": "onnx/model_qint8_avx512.onnx"},
             )
+            self.print_elapsed_time("_initialize_embedder") 
         except Exception as e:
             print(f"Error initializing embedder: {e}")
             raise
@@ -56,6 +66,7 @@ class PDFProcessor:
                     distance=Distance.COSINE
                 ),
             )
+            self.print_elapsed_time("_initialize_qdrant_collection") 
         except Exception as e:
             print(f"Collection initialization note: {str(e)}")
 
@@ -64,7 +75,11 @@ class PDFProcessor:
         try:
             response = requests.get(url)
             response.raise_for_status()
+            self.print_elapsed_time()
+            self.print_elapsed_time("download_pdf")
+
             return response.content
+
         except Exception as e:
             print(f"Failed to download PDF: {str(e)}")
             raise
@@ -76,7 +91,9 @@ class PDFProcessor:
             with fitz.open(stream=pdf_content, filetype="pdf") as doc:
                 for page in doc:
                     text += page.get_text()
+            self.print_elapsed_time("extract_text")
             return text
+         
         except Exception as e:
             print(f"Error extracting text: {e}")
             raise
@@ -88,6 +105,7 @@ class PDFProcessor:
             chunk_overlap=64,
             separators=["\n\n", "\n", ".", " ", ""]
         )
+        self.print_elapsed_time("chunk_text")
         return text_splitter.split_text(text)
 
     def store_embeddings_in_qdrant(self):
@@ -112,6 +130,7 @@ class PDFProcessor:
             wait=True
         )
         print(f"Stored {len(points)} document chunks in Qdrant")
+        self.print_elapsed_time("store_embeddings_in_qdrant")
         return operation_info
 
     def search_questions(self, questions: List[str]) -> None:
@@ -142,6 +161,7 @@ class PDFProcessor:
             })
         #print(self.retrieved_answers)
         print(f"Retrieved context for {len(questions)} questions")
+        self.print_elapsed_time("search_questions")
     
 
 
@@ -198,7 +218,8 @@ class PDFProcessor:
                 model="mistralai/mistral-small-3.2-24b-instruct:free",
                 messages=[{"role": "user", "content": prompt}]
             )
-
+            
+            self.print_elapsed_time("refine_with_llm")
             
             
             #final_ans fixed
