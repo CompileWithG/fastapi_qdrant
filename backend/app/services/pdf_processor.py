@@ -9,8 +9,12 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 from typing import List, Dict
 from openai import OpenAI
 import json
-from google import genai
-from google.genai import types
+from dotenv import load_dotenv
+load_dotenv()
+import os
+
+
+
 class PDFProcessor:
     def __init__(self):
         self.document_embeddings = None
@@ -20,7 +24,10 @@ class PDFProcessor:
         self.qdrant_client = QdrantClient(url="http://localhost:6333")
         self.collection_name = "document_chunks"
         self.retrieved_answers = []
-        self.gemini_client = genai.Client(api_key="AIzaSyB0jvrzZfdNTnJMUPQm1_jJvjGbi1h8Suw")
+        self.client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key = os.getenv("API_KEY")
+)
         
         self._initialize_embedder()
 
@@ -133,7 +140,7 @@ class PDFProcessor:
             })
         #print(self.retrieved_answers)
         print(f"Retrieved context for {len(questions)} questions")
-    def _format_gemini_response(self, answer: str) -> str:
+    def _format_deepseek_response(self, answer: str) -> str:
         """Format Gemini's response to match the desired output format"""
         # Remove any markdown formatting if present
         clean_answer = answer.replace("**", "").replace("*", "")
@@ -144,63 +151,65 @@ class PDFProcessor:
         # Alternatively, keep the full formatted response
         return first_sentence  # or return clean_answer for full response
 
-    def refine_with_gemini(self) -> Dict:
-        """Use Gemini to generate precise answers from retrieved context"""
+
+
+#deepseek propmt fix
+
+    def refine_with_deepseek(self) -> Dict:
+        """Use DeepSeek to generate answers for all questions in one go"""
         if not self.retrieved_answers:
             return {"answers": []}
-        
-        final_answers = []
-        
-        for qa_pair in self.retrieved_answers:
+
+        # Build the prompt for all questions
+        questions_contexts = ""
+        for idx, qa_pair in enumerate(self.retrieved_answers, 1):
             question = qa_pair['question']
             context = "\n\n".join(qa_pair['context'])
-            
-            prompt = f"""
-            **Document Analysis Task**
-            
-            **Question:** {question}
-            
-            **Relevant Context from Document:**
-            {context}
-            
-            **Instructions:**
-            1. Analyze the provided context thoroughly
-            2. Identify all relevant information that answers the question
-            3. Provide a comprehensive answer that:
-               - Directly addresses the question
-               - Includes supporting evidence from the context
-               - Explains the reasoning behind your conclusion
-               - Maintains accuracy to the original document
-            4. If the context doesn't contain the answer, state "The document does not specify."
-            
-            **Required Format:**
-            - Start with a clear, direct answer
-            - Follow with reasoning/justification (marked with "Reasoning:")
-            - Cite relevant parts of the context (marked with "Reference:")
-            """
+            questions_contexts += f"\n\n**Question {idx}:** {question}\n**Relevant Context:**\n{context}\n"
 
-            try:
-                response = self.gemini_client.models.generate_content(
-                    model="gemini-1.5-pro-latest",  # or "gemini-1.5-flash" for faster responses
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.3,
-                        max_output_tokens=400,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0)  # Disables extended thinking
-                    )
-                )
-                
-                # Extract the response text
-                answer = response.text
-                
-                # Format the answer to match your desired output style
-                formatted_answer = self._format_gemini_response(answer)
-                final_answers.append(formatted_answer)
-                
-            except Exception as e:
-                print(f"Error generating answer with Gemini: {e}")
-                final_answers.append("The document does not specify.")
-        
+        prompt = f"""
+        **Document Analysis Task**
+
+        You will be given multiple questions and their relevant context from a document.
+
+        {questions_contexts}
+
+        **Instructions:**
+        For each question:
+        1. Analyze the provided context thoroughly.
+        2. Identify all relevant information that answers the question.
+        3. Provide a comprehensive answer that:
+        - Directly addresses the question
+        - Includes supporting evidence from the context
+        - Explains the reasoning behind your conclusion
+        - Maintains accuracy to the original document
+        4. If the context doesn't contain the answer, state "The document does not specify."
+
+        **Required Format:**
+        Respond with a JSON object containing an "answers" array. Each entry must start with a clear, direct answer to the query.
+        Each entry should be:
+        "Direct answer. Reasoning: Justification or explanation. Reference: Exact supporting content from the source."
+
+        """
+
+        final_answers = []
+        try:
+            completion = self.client.chat.completions.create(
+                extra_body={},
+                model="deepseek/deepseek-r1-0528:free",
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            print(completion.choices[0].message.content)
+            # Extract the response text
+            answer = completion.text
+            # Format the answer to match your desired output style
+            formatted_answer = self._format_deepseek_response(answer)
+            final_answers.append(formatted_answer)
+        except Exception as e:
+            print(f"Error generating answer with DeepSeek: {e}")
+            final_answers.append("The document does not specify.")
+
         return {"answers": final_answers}
 
 
@@ -252,4 +261,4 @@ class PDFProcessor:
         self.process_questions(questions)
         self.search_questions(questions)
         
-        return self.refine_with_gemini()
+        return self.refine_with_deepseek()
