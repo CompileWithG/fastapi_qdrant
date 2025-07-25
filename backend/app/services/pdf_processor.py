@@ -15,6 +15,7 @@ import os
 
 
 
+
 class PDFProcessor:
     def __init__(self):
         self.document_embeddings = None
@@ -160,34 +161,41 @@ class PDFProcessor:
             questions_contexts += f"\n\n**Question {idx}:** {question}\n**Relevant Context:**\n{context}\n"
 
         prompt = f"""
-        **Document Analysis Task**
+            Document Analysis Task
 
-        You will be given multiple questions and their relevant context from a document.
+            You will be given multiple questions and their relevant context from a document.
 
-        {questions_contexts}
+            {questions_contexts}
 
-        **Instructions:**
-        For each question:
-        1. Analyze the provided context thoroughly.
-        2. Identify all relevant information that answers the question.
-        3. Provide a comprehensive answer that:
-        - Directly addresses the question
-        - Includes supporting evidence from the context
-        - Explains the reasoning behind your conclusion
-        - Maintains accuracy to the original document
-        4. If the context doesn't contain the answer, state "The document does not specify."
+            Instructions:
+            For each question:
+            1. Carefully analyze the provided context.
+            2. Identify all key information needed to answer the question.
+            3. Provide a clear and complete response that:
+            - Directly answers the question
+            - Explains why that answer is correct
+            - Includes the relevant supporting evidence from the document
 
-        **Required Format:**
-        Respond with a JSON object containing an "answers" array. Each entry must start with a clear, direct answer to the query.
-        Each entry should be:
-        "Direct answer. Reasoning: Justification or explanation. Reference: Exact supporting content from the source."
+            Output Format:
+            - Output ONLY a plain Python list of strings.
+            - Do NOT include markdown, code blocks, escape characters, or backticks.
+            - Each item in the list must be a natural, complete sentence or paragraph that blends the answer, reasoning, and reference into a single string.
+            - Do not use labels like "Answer:", "Reasoning:", or "Reference:".
+            - Your output must look exactly like this:
 
-        """
+            [
+            "A grace period of thirty days is provided after the due date for premium payment, which ensures continuity of coverage without loss of benefits, as clearly mentioned in the document: 'A grace period of 30 days is allowed for payment of premium.'",
+            "The policy covers pre-existing diseases only after thirty-six months of continuous coverage, which helps the insurer manage initial high-risk liabilities, as stated in the clause: 'Pre-existing diseases will be covered after 36 months of continuous coverage.'"
+            ]
+
+            Strictly follow this format. Do not include any headings, JSON objects, markdown syntax, escape characters, or code fences.
+            """
+
 
         try:
             completion = self.client.chat.completions.create(
                 extra_body={},
-                model="deepseek/deepseek-r1-0528:free",
+                model="mistralai/mistral-small-3.2-24b-instruct:free",
                 messages=[{"role": "user", "content": prompt}]
             )
 
@@ -195,7 +203,7 @@ class PDFProcessor:
             
             #final_ans fixed
             formatted_answer = completion.choices[0].message.content
-            self.final_answers.append(formatted_answer)
+            self.final_answers=formatted_answer
         except Exception as e:
             print(f"Error generating answer with DeepSeek: {e}")
             self.final_answers.append("The document does not specify.")

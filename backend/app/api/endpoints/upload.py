@@ -17,8 +17,8 @@ class DocumentRequest(BaseModel):
 async def process_document(request: DocumentRequest):
     """Endpoint to process document and questions"""
     try:
-        processor.process(request.documents, request.questions)
-        return {"status": "processing completed"}
+        return processor.process(request.documents, request.questions)
+        
     except Exception as e:
         raise HTTPException(
             status_code=500,
