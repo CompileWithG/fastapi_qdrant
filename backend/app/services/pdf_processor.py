@@ -34,10 +34,7 @@ class PDFProcessor:
         self.qdrant_client = QdrantClient(url="http://localhost:6333")
         self.collection_name = "document_chunks"
         self.retrieved_answers = []
-        self.client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key = os.getenv("API_KEY")
-        )
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) 
         
         self._initialize_embedder()
 
@@ -144,7 +141,7 @@ class PDFProcessor:
             search_results = self.qdrant_client.query_points(
                 collection_name=self.collection_name,
                 query=embedding.tolist(),
-                limit=3,
+                limit=2,
                 with_payload=True,
             ).points
             #print(search_results)
@@ -213,18 +210,17 @@ class PDFProcessor:
 
 
         try:
-            completion = self.client.chat.completions.create(
-                extra_body={},
-                model="mistralai/mistral-small-3.2-24b-instruct:free",
-                messages=[{"role": "user", "content": prompt}]
-            )
+           response = self.client.chat.completions.create(
+           model="gpt-4.1",
+           messages=[{"role": "user", "content": prompt}],
+)
             
-            self.print_elapsed_time("refine_with_llm")
+           self.print_elapsed_time("refine_with_llm")
             
             
             #final_ans fixed
-            formatted_answer = completion.choices[0].message.content
-            self.final_answers=formatted_answer
+           formatted_answer = response.choices[0].message.content
+           self.final_answers=formatted_answer
         except Exception as e:
             print(f"Error generating answer with DeepSeek: {e}")
             self.final_answers.append("The document does not specify.")
