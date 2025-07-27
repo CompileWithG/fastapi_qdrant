@@ -32,7 +32,7 @@ class PDFProcessor:
         self.qdrant_client = QdrantClient(url="http://localhost:6333")
         self.collection_name = "document_chunks"
         self.retrieved_answers = []
-        self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) 
         self._initialize_embedder()
 
     def _initialize_embedder(self):
@@ -217,12 +217,14 @@ class PDFProcessor:
             """
 
         try:
-            response = self.client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile",
-            )
-            formatted_answer = response.choices[0].message.content
-            self.final_answers = formatted_answer
+           response = self.client.chat.completions.create(
+           model="gpt-4.1",
+           messages=[{"role": "user", "content": prompt}],
+)
+            
+           self.print_elapsed_time("refine_with_llm")
+           formatted_answer = response.choices[0].message.content
+           self.final_answers = formatted_answer
         except Exception as e:
             print(f"Error generating answer with DeepSeek: {e}")
             self.final_answers.append("The document does not specify.")
