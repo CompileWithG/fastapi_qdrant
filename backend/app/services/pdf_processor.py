@@ -16,7 +16,9 @@ load_dotenv()
 import os
 import time
 import urllib.parse
-from groq import Groq
+from email import policy
+from email.parser import BytesParser
+from urllib.parse import urlparse
 
 class PDFProcessor:
     def print_elapsed_time(self, message=""):
@@ -69,8 +71,6 @@ class PDFProcessor:
         try:
             self.qdrant_client.delete_collection(collection_name=self.collection_name)
             print(f"Cleared Qdrant collection: {self.collection_name}")
-            # Recreate collection for next use
-            #elf._initialize_qdrant_collection()
         except Exception as e:
             print(f"Error clearing Qdrant collection: {e}")
 
@@ -80,34 +80,72 @@ class PDFProcessor:
         path = parsed.path
         return os.path.splitext(path)[1].lower()
 
-    def download_file(self, url: str) -> bytes:
-        """Download file (PDF or DOCX) from URL"""
+    def download_file(self, url: str) -> tuple:
+        """Download file and return (content, filetype)"""
         try:
             response = requests.get(url)
             response.raise_for_status()
-            self.print_elapsed_time()
+            
+            content_type = response.headers.get('Content-Type', '').lower()
+            if 'application/pdf' in content_type:
+                filetype = 'pdf'
+            elif 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' in content_type:
+                filetype = 'docx'
+            elif 'application/msword' in content_type:
+                filetype = 'doc'
+            elif 'message/rfc822' in content_type:
+                filetype = 'eml'
+            else:
+                path = urlparse(url).path
+                if path.endswith('.pdf'):
+                    filetype = 'pdf'
+                elif path.endswith('.docx'):
+                    filetype = 'docx'
+                elif path.endswith('.doc'):
+                    filetype = 'doc'
+                elif path.endswith('.eml'):
+                    filetype = 'eml'
+                else:
+                    filetype = 'pdf'  # Default assumption
+            
             self.print_elapsed_time("download_file")
-            return response.content
+            return response.content, filetype
         except Exception as e:
             print(f"Failed to download file: {str(e)}")
             raise
 
-    def extract_text(self, file_content: bytes, file_extension: str) -> str:
-        """Extract text from file bytes (PDF or DOCX)"""
+    def extract_text(self, content: bytes, filetype: str) -> str:
+        """Extract text from bytes based on filetype"""
         try:
-            text = ""
-            if file_extension == '.pdf':
-                with fitz.open(stream=file_content, filetype="pdf") as doc:
+            if filetype == 'pdf':
+                text = ""
+                with fitz.open(stream=content, filetype="pdf") as doc:
                     for page in doc:
                         text += page.get_text()
-            elif file_extension == '.docx' or file_extension == '.doc':
-                doc = Document(BytesIO(file_content))
-                text = '\n'.join([para.text for para in doc.paragraphs])
-            else:
-                raise ValueError(f"Unsupported file type: {file_extension}")
+                return text
             
-            self.print_elapsed_time("extract_text")
-            return text
+            elif filetype in ['docx', 'doc']:
+                doc = Document(BytesIO(content))
+                return '\n'.join([para.text for para in doc.paragraphs])
+            
+            elif filetype == 'eml':
+                msg = BytesParser(policy=policy.default).parsebytes(content)
+                text = ""
+                
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        content_type = part.get_content_type()
+                        charset = part.get_content_charset() or 'utf-8'
+                        if content_type == 'text/plain':
+                            payload = part.get_payload(decode=True)
+                            text += payload.decode(charset, errors='replace') + "\n\n"
+                else:
+                    payload = msg.get_payload(decode=True)
+                    charset = msg.get_content_charset() or 'utf-8'
+                    text = payload.decode(charset, errors='replace')
+                
+                return text
+                
         except Exception as e:
             print(f"Error extracting text: {e}")
             raise
@@ -217,26 +255,25 @@ class PDFProcessor:
             """
 
         try:
-           response = self.client.chat.completions.create(
-           model="gpt-4.1",
-           messages=[{"role": "user", "content": prompt}],
-)
+            response = self.client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[{"role": "user", "content": prompt}]
+            )
             
-           self.print_elapsed_time("refine_with_llm")
-           formatted_answer = response.choices[0].message.content
-           self.final_answers = formatted_answer
+            self.print_elapsed_time("refine_with_llm")
+            formatted_answer = response.choices[0].message.content
+            self.final_answers = formatted_answer
         except Exception as e:
             print(f"Error generating answer with DeepSeek: {e}")
-            self.final_answers.append("The document does not specify.")
+            self.final_answers = ["The document does not specify."]
 
         return {"answers": self.final_answers}
 
     def process_document(self, document_url: str):
         """Process document through the full pipeline"""
         try:
-            file_content = self.download_file(document_url)
-            file_extension = self.get_file_extension(document_url)
-            text = self.extract_text(file_content, file_extension)
+            file_content, filetype = self.download_file(document_url)
+            text = self.extract_text(file_content, filetype)
             
             self.chunks = self.chunk_text(text)
             if not self.chunks:
@@ -282,7 +319,6 @@ class PDFProcessor:
             self.search_questions(questions)
             self._clear_qdrant_collection()
             return self.refine_with_deepseek()
-              # This will always run, even if an error occurs
         except Exception as e:
             print(f"Processing failed: {e}")
-            return {"answers": ["An error occurred during process fucntion  try again later."]}
+            return {"answers": ["An error occurred during processing. Please try again later."]}
