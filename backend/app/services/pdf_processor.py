@@ -199,6 +199,7 @@ class PDFProcessor:
                 limit=2,
                 with_payload=True,
             ).points
+            
             relevant_chunks = [
                 result.payload['text']
                 for result in search_results
@@ -209,6 +210,7 @@ class PDFProcessor:
                 'question': question,
                 'context': relevant_chunks
             })
+        
         print(f"Retrieved context for {len(questions)} questions")
         self.print_elapsed_time("search_questions")
 
@@ -244,12 +246,21 @@ class PDFProcessor:
             - Do NOT include markdown, code blocks, escape characters, or backticks.
             - Each item in the list must be a natural, complete sentence or paragraph that blends the answer, reasoning, and reference into a single string.
             - Do not use labels like "Answer:", "Reasoning:", or "Reference:".
-            - Your output must look exactly like this:
+            - If any question doesnt have enough context to answer, return a single string: "The document does not specify."
+            - Your output must be structured like this:
 
-            [
-            "A grace period of thirty days is provided after the due date for premium payment, which ensures continuity of coverage without loss of benefits, as clearly mentioned in the document: 'A grace period of 30 days is allowed for payment of premium.'",
-            "The policy covers pre-existing diseases only after thirty-six months of continuous coverage, which helps the insurer manage initial high-risk liabilities, as stated in the clause: 'Pre-existing diseases will be covered after 36 months of continuous coverage.'"
-            ]
+           [
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nullam euismod odio vitae nisl ultricies, eget fermentum ipsum tempor. Proin auctor metus in libero.",
+    "Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; Cras convallis tellus ac quam tincidunt (36) varius. Pellentesque habitant morbi tristique senectus.",
+    "Curabitur, yes lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam (24) months. Quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Two (2) years sint occaecat cupidatat non proident.",
+    "Yes, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium.",
+    "A No Claim Discount of 5% on the base lorem ipsum dolor sit amet. Consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+    "Yes, the lorem ipsum policy reimburses expenses for health check-ups at the end of every block of two continuous policy years. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit.",
+    "A hospital is defined as lorem ipsum dolor sit amet, consectetur (10) inpatient beds or (15) beds, with qualified nursing staff available 24/7. Neque porro quisquam est qui dolorem ipsum quia dolor sit amet.",
+    "The policy covers medical expenses for inpatient treatment under Lorem, Ipsum, Dolor, Sit, Amet, and Consectetur systems. Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur.",
+    "Yes, for Plan A, the daily room rent is capped at 1% of the Lorem Ipsum, and ICU charges are capped at 2%. At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium voluptatum."
+]
 
             Strictly follow this format. Do not include any headings, JSON objects, markdown syntax, escape characters, or code fences.
             """
