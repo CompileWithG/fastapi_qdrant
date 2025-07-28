@@ -271,6 +271,7 @@ class PDFProcessor:
             self.print_elapsed_time("refine_with_llm")
             formatted_answer = response.choices[0].message.content
             self.final_answers = formatted_answer
+            self.final_answers = json.loads(self.final_answers)  # Convert string to list
         except Exception as e:
             print(f"Error generating answer with DeepSeek: {e}")
             self.final_answers = ["The document does not specify."]
