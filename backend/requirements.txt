@@ -29,6 +29,7 @@ frozenlist==1.7.0
 fsspec==2025.7.0
 greenlet==3.2.3
 griffe==1.8.0
+groq==0.30.0
 grpcio==1.73.1
 h11==0.16.0
 h2==4.2.0

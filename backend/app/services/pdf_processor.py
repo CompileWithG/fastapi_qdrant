@@ -1,5 +1,7 @@
 # app/services/pdf_processor.py
 import fitz
+from docx import Document
+from io import BytesIO
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -13,17 +15,15 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 import time
-
-
-
-
-
+import urllib.parse
+from email import policy
+from email.parser import BytesParser
+from urllib.parse import urlparse
 
 class PDFProcessor:
     def print_elapsed_time(self, message=""):
         elapsed = time.time() - self.start_time
         print(f"[+{elapsed:.2f}s] {message}")
-
 
     def __init__(self):
         self.document_embeddings = None
@@ -35,7 +35,6 @@ class PDFProcessor:
         self.collection_name = "document_chunks"
         self.retrieved_answers = []
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) 
-        
         self._initialize_embedder()
 
     def _initialize_embedder(self):
@@ -67,30 +66,86 @@ class PDFProcessor:
         except Exception as e:
             print(f"Collection initialization note: {str(e)}")
 
-    def download_pdf(self, url: str) -> bytes:
-        """Download PDF from URL"""
+    def _clear_qdrant_collection(self):
+        """Delete all vectors from the Qdrant collection"""
+        try:
+            self.qdrant_client.delete_collection(collection_name=self.collection_name)
+            print(f"Cleared Qdrant collection: {self.collection_name}")
+        except Exception as e:
+            print(f"Error clearing Qdrant collection: {e}")
+
+    def get_file_extension(self, url: str) -> str:
+        """Extract file extension from URL (ignoring query parameters)"""
+        parsed = urllib.parse.urlparse(url)
+        path = parsed.path
+        return os.path.splitext(path)[1].lower()
+
+    def download_file(self, url: str) -> tuple:
+        """Download file and return (content, filetype)"""
         try:
             response = requests.get(url)
             response.raise_for_status()
-            self.print_elapsed_time()
-            self.print_elapsed_time("download_pdf")
-
-            return response.content
-
+            
+            content_type = response.headers.get('Content-Type', '').lower()
+            if 'application/pdf' in content_type:
+                filetype = 'pdf'
+            elif 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' in content_type:
+                filetype = 'docx'
+            elif 'application/msword' in content_type:
+                filetype = 'doc'
+            elif 'message/rfc822' in content_type:
+                filetype = 'eml'
+            else:
+                path = urlparse(url).path
+                if path.endswith('.pdf'):
+                    filetype = 'pdf'
+                elif path.endswith('.docx'):
+                    filetype = 'docx'
+                elif path.endswith('.doc'):
+                    filetype = 'doc'
+                elif path.endswith('.eml'):
+                    filetype = 'eml'
+                else:
+                    filetype = 'pdf'  # Default assumption
+            
+            self.print_elapsed_time("download_file")
+            return response.content, filetype
         except Exception as e:
-            print(f"Failed to download PDF: {str(e)}")
+            print(f"Failed to download file: {str(e)}")
             raise
 
-    def extract_text(self, pdf_content: bytes) -> str:
-        """Extract text from PDF bytes"""
+    def extract_text(self, content: bytes, filetype: str) -> str:
+        """Extract text from bytes based on filetype"""
         try:
-            text = ""
-            with fitz.open(stream=pdf_content, filetype="pdf") as doc:
-                for page in doc:
-                    text += page.get_text()
-            self.print_elapsed_time("extract_text")
-            return text
-         
+            if filetype == 'pdf':
+                text = ""
+                with fitz.open(stream=content, filetype="pdf") as doc:
+                    for page in doc:
+                        text += page.get_text()
+                return text
+            
+            elif filetype in ['docx', 'doc']:
+                doc = Document(BytesIO(content))
+                return '\n'.join([para.text for para in doc.paragraphs])
+            
+            elif filetype == 'eml':
+                msg = BytesParser(policy=policy.default).parsebytes(content)
+                text = ""
+                
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        content_type = part.get_content_type()
+                        charset = part.get_content_charset() or 'utf-8'
+                        if content_type == 'text/plain':
+                            payload = part.get_payload(decode=True)
+                            text += payload.decode(charset, errors='replace') + "\n\n"
+                else:
+                    payload = msg.get_payload(decode=True)
+                    charset = msg.get_content_charset() or 'utf-8'
+                    text = payload.decode(charset, errors='replace')
+                
+                return text
+                
         except Exception as e:
             print(f"Error extracting text: {e}")
             raise
@@ -98,8 +153,8 @@ class PDFProcessor:
     def chunk_text(self, text: str) -> List[str]:
         """Split text into chunks"""
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=2048,
-            chunk_overlap=64,
+            chunk_size=1024,
+            chunk_overlap=32,
             separators=["\n\n", "\n", ".", " ", ""]
         )
         self.print_elapsed_time("chunk_text")
@@ -144,33 +199,26 @@ class PDFProcessor:
                 limit=2,
                 with_payload=True,
             ).points
-            #print(search_results)
+            
             relevant_chunks = [
-            result.payload['text']
-            for result in search_results
-            if result.payload and 'text' in result.payload
-    ]
+                result.payload['text']
+                for result in search_results
+                if result.payload and 'text' in result.payload
+            ]
 
-            #print("eroor occuers here")
             self.retrieved_answers.append({
                 'question': question,
                 'context': relevant_chunks
             })
-        #print(self.retrieved_answers)
+        
         print(f"Retrieved context for {len(questions)} questions")
         self.print_elapsed_time("search_questions")
-    
-
-
-
-#deepseek propmt fix
 
     def refine_with_deepseek(self) -> Dict:
         """Use DeepSeek to generate answers for all questions in one go"""
         if not self.retrieved_answers:
             return {"answers": []}
 
-        # Build the prompt for all questions
         questions_contexts = ""
         for idx, qa_pair in enumerate(self.retrieved_answers, 1):
             question = qa_pair['question']
@@ -195,44 +243,49 @@ class PDFProcessor:
 
             Output Format:
             - Output ONLY a plain Python list of strings.
+            Be concise, accurate, and consistent,don't give extra details unless its relevant to the question asked. Only return the final list of responses.
             - Do NOT include markdown, code blocks, escape characters, or backticks.
             - Each item in the list must be a natural, complete sentence or paragraph that blends the answer, reasoning, and reference into a single string.
             - Do not use labels like "Answer:", "Reasoning:", or "Reference:".
-            - Your output must look exactly like this:
+            - If any question doesnt have enough context to answer, return a single string for each question your not able to answer to with the given context: "The document does not specify."
+            - Your output must be structured like this:
 
-            [
-            "A grace period of thirty days is provided after the due date for premium payment, which ensures continuity of coverage without loss of benefits, as clearly mentioned in the document: 'A grace period of 30 days is allowed for payment of premium.'",
-            "The policy covers pre-existing diseases only after thirty-six months of continuous coverage, which helps the insurer manage initial high-risk liabilities, as stated in the clause: 'Pre-existing diseases will be covered after 36 months of continuous coverage.'"
-            ]
+           [
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nullam euismod odio vitae nisl ultricies, eget fermentum ipsum tempor. Proin auctor metus in libero.",
+    "Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; Cras convallis tellus ac quam tincidunt (36) varius. Pellentesque habitant morbi tristique senectus.",
+    "Curabitur, yes lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam (24) months. Quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Two (2) years sint occaecat cupidatat non proident.",
+    "Yes, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium.",
+    "A No Claim Discount of 5% on the base lorem ipsum dolor sit amet. Consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+    "Yes, the lorem ipsum policy reimburses expenses for health check-ups at the end of every block of two continuous policy years. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit.",
+    "A hospital is defined as lorem ipsum dolor sit amet, consectetur (10) inpatient beds or (15) beds, with qualified nursing staff available 24/7. Neque porro quisquam est qui dolorem ipsum quia dolor sit amet.",
+    "The policy covers medical expenses for inpatient treatment under Lorem, Ipsum, Dolor, Sit, Amet, and Consectetur systems. Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur.",
+    "Yes, for Plan A, the daily room rent is capped at 1% of the Lorem Ipsum, and ICU charges are capped at 2%. At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium voluptatum."
+]
 
             Strictly follow this format. Do not include any headings, JSON objects, markdown syntax, escape characters, or code fences.
             """
 
-
         try:
-           response = self.client.chat.completions.create(
-           model="gpt-4.1",
-           messages=[{"role": "user", "content": prompt}],
-)
+            response = self.client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[{"role": "user", "content": prompt}]
+            )
             
-           self.print_elapsed_time("refine_with_llm")
-            
-            
-            #final_ans fixed
-           formatted_answer = response.choices[0].message.content
-           self.final_answers=formatted_answer
+            self.print_elapsed_time("refine_with_llm")
+            formatted_answer = response.choices[0].message.content
+            self.final_answers = formatted_answer
         except Exception as e:
             print(f"Error generating answer with DeepSeek: {e}")
-            self.final_answers.append("The document does not specify.")
+            self.final_answers = ["The document does not specify."]
 
         return {"answers": self.final_answers}
-
 
     def process_document(self, document_url: str):
         """Process document through the full pipeline"""
         try:
-            pdf_content = self.download_pdf(document_url)
-            text = self.extract_text(pdf_content)
+            file_content, filetype = self.download_file(document_url)
+            text = self.extract_text(file_content, filetype)
             
             self.chunks = self.chunk_text(text)
             if not self.chunks:
@@ -272,8 +325,12 @@ class PDFProcessor:
         Main processing method
         Returns: Dictionary with "answers" key containing refined responses
         """
-        self.process_document(document_url)
-        self.process_questions(questions)
-        self.search_questions(questions)
-        
-        return self.refine_with_deepseek()
+        try:
+            self.process_document(document_url)
+            self.process_questions(questions)
+            self.search_questions(questions)
+            self._clear_qdrant_collection()
+            return self.refine_with_deepseek()
+        except Exception as e:
+            print(f"Processing failed: {e}")
+            return {"answers": ["An error occurred during processing. Please try again later."]}
