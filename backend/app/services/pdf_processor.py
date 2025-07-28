@@ -153,8 +153,8 @@ class PDFProcessor:
     def chunk_text(self, text: str) -> List[str]:
         """Split text into chunks"""
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=2048,
-            chunk_overlap=64,
+            chunk_size=1024,
+            chunk_overlap=32,
             separators=["\n\n", "\n", ".", " ", ""]
         )
         self.print_elapsed_time("chunk_text")
