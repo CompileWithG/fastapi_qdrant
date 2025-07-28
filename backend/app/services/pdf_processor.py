@@ -196,7 +196,7 @@ class PDFProcessor:
             search_results = self.qdrant_client.query_points(
                 collection_name=self.collection_name,
                 query=embedding.tolist(),
-                limit=2,
+                limit=4,
                 with_payload=True,
             ).points
             
@@ -232,14 +232,15 @@ class PDFProcessor:
 
             {questions_contexts}
 
-            Instructions:
+            Instructions(strictly must follow):
             For each question:
             1. Carefully analyze the provided context.
             2. Identify all key information needed to answer the question.
             3. Provide a clear and complete response that:
             - Directly answers the question
             - Explains why that answer is correct
-            - Includes the relevant supporting evidence from the document
+            - Includes the relevant supporting evidence from the document as long as it doesnt go beyond the scope of whats asked in the question
+            - make sure the answers are in the same order as the questions
 
             Output Format:
             - Output ONLY a plain Python list of strings.
@@ -247,20 +248,15 @@ class PDFProcessor:
             - Do NOT include markdown, code blocks, escape characters, or backticks.
             - Each item in the list must be a natural, complete sentence or paragraph that blends the answer, reasoning, and reference into a single string.
             - Do not use labels like "Answer:", "Reasoning:", or "Reference:".
-            - If any question doesnt have enough context to answer, return a single string for each question your not able to answer to with the given context: "The document does not specify."
+            - (strictly must follow this)If a question doesnt have enough context to answer, return the given  string for that specific  question only  : "The document does not specify.",even if there is something remotly relevant to the question include it in the answer except of "document does not specify" string.
             - Your output must be structured like this:
 
            [
     "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nullam euismod odio vitae nisl ultricies, eget fermentum ipsum tempor. Proin auctor metus in libero.",
     "Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; Cras convallis tellus ac quam tincidunt (36) varius. Pellentesque habitant morbi tristique senectus.",
     "Curabitur, yes lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam (24) months. Quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
-    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Two (2) years sint occaecat cupidatat non proident.",
-    "Yes, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium.",
-    "A No Claim Discount of 5% on the base lorem ipsum dolor sit amet. Consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
-    "Yes, the lorem ipsum policy reimburses expenses for health check-ups at the end of every block of two continuous policy years. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit.",
-    "A hospital is defined as lorem ipsum dolor sit amet, consectetur (10) inpatient beds or (15) beds, with qualified nursing staff available 24/7. Neque porro quisquam est qui dolorem ipsum quia dolor sit amet.",
-    "The policy covers medical expenses for inpatient treatment under Lorem, Ipsum, Dolor, Sit, Amet, and Consectetur systems. Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur.",
-    "Yes, for Plan A, the daily room rent is capped at 1% of the Lorem Ipsum, and ICU charges are capped at 2%. At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium voluptatum."
+    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Two (2) years sint occaecat cupidatat non proident."
+    
 ]
 
             Strictly follow this format. Do not include any headings, JSON objects, markdown syntax, escape characters, or code fences.
@@ -268,7 +264,7 @@ class PDFProcessor:
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4.1",
+                model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}]
             )
             

@@ -10,7 +10,7 @@ import os
 # Load environment variables
 load_dotenv()
 
-router = APIRouter()
+router = APIRouter(prefix="/api/v1")
 
 # Initialize processor
 processor = PDFProcessor()
