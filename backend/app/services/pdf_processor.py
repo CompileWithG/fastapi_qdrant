@@ -243,10 +243,11 @@ class PDFProcessor:
 
             Output Format:
             - Output ONLY a plain Python list of strings.
+            Be concise, accurate, and consistent,don't give extra details unless its relevant to the question asked. Only return the final list of responses.
             - Do NOT include markdown, code blocks, escape characters, or backticks.
             - Each item in the list must be a natural, complete sentence or paragraph that blends the answer, reasoning, and reference into a single string.
             - Do not use labels like "Answer:", "Reasoning:", or "Reference:".
-            - If any question doesnt have enough context to answer, return a single string: "The document does not specify."
+            - If any question doesnt have enough context to answer, return a single string for each question your not able to answer to with the given context: "The document does not specify."
             - Your output must be structured like this:
 
            [
