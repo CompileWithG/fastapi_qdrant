@@ -42,6 +42,7 @@ class PDFProcessor:
         self.collection_name = "document_chunks"
         self.retrieved_answers = []
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) 
+        #print("---------------------------------------------------------------------------------------------------")
         self._initialize_embedder()
 
     def _initialize_embedder(self):
@@ -54,6 +55,7 @@ class PDFProcessor:
                 backend="onnx",
                 model_kwargs={"file_name": "onnx/model_qint8_avx512.onnx"},
             )
+            #print("==================================================================================================================")
             self.print_elapsed_time("_initialize_embedder") 
         except Exception as e:
             print(f"Error initializing embedder: {e}")
@@ -67,18 +69,19 @@ class PDFProcessor:
     vectors_config=VectorParams(
         size=384,
         distance=Distance.COSINE,
-        on_disk=True  # Reduces RAM usage without significant performance hit
+        on_disk=False # Reduces RAM usage without significant performance hit
     ),
     optimizers_config=OptimizersConfigDiff(
-        indexing_threshold=20000,  # Build index after 20k vectors
-        memmap_threshold=20000,   # Use memory-mapped files
-        default_segment_number=4  # Parallel processing
+        indexing_threshold=0,  # Build index after 20k vectors
+        memmap_threshold=0,   # Use memory-mapped files
+        default_segment_number=8,
+        max_optimization_threads=4  # Parallel processing
     ),
     hnsw_config=HnswConfigDiff(
         m=24,                     # Higher connectivity (16-32 is optimal)
-        ef_construct=200,         # Higher quality index build
+        ef_construct=75,         # Higher quality index build
         full_scan_threshold=5000, # Use HNSW for collections >5k vectors
-        on_disk=True              # Store graph on disk
+        on_disk=False            # Store graph on disk
     ),
     quantization_config=ScalarQuantization(
         scalar=ScalarQuantizationConfig(
@@ -137,7 +140,6 @@ class PDFProcessor:
                     filetype = 'eml'
                 else:
                     filetype = 'pdf'  # Default assumption
-            
             self.print_elapsed_time("download_file")
             return response.content, filetype
         except Exception as e:
@@ -148,20 +150,23 @@ class PDFProcessor:
         """Extract text from bytes based on filetype"""
         try:
             if filetype == 'pdf':
+                #pdf processing
                 text = ""
                 with fitz.open(stream=content, filetype="pdf") as doc:
                     for page in doc:
                         text += page.get_text()
+                #print(text)
                 return text
             
             elif filetype in ['docx', 'doc']:
+                #doc processing
                 doc = Document(BytesIO(content))
                 return '\n'.join([para.text for para in doc.paragraphs])
             
             elif filetype == 'eml':
                 msg = BytesParser(policy=policy.default).parsebytes(content)
                 text = ""
-                
+                #email processing
                 if msg.is_multipart():
                     for part in msg.walk():
                         content_type = part.get_content_type()
@@ -173,7 +178,6 @@ class PDFProcessor:
                     payload = msg.get_payload(decode=True)
                     charset = msg.get_content_charset() or 'utf-8'
                     text = payload.decode(charset, errors='replace')
-                
                 return text
                 
         except Exception as e:
@@ -183,11 +187,14 @@ class PDFProcessor:
     def chunk_text(self, text: str) -> List[str]:
         """Split text into chunks"""
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1024,
-            chunk_overlap=32,
-            separators=["\n\n", "\n", ".", " ", ""]
+            chunk_size=768,
+            chunk_overlap=0,
+            separators=["\n\n", "\n", "."],
+            length_function=lambda x: len(x.encode('utf-8')),
+            keep_separator=False
         )
         self.print_elapsed_time("chunk_text")
+        #print(text_splitter.split_text(text))
         return text_splitter.split_text(text)
 
     def store_embeddings_in_qdrant(self):
@@ -217,7 +224,7 @@ class PDFProcessor:
 
     def search_questions(self, questions: List[str]) -> None:
         """Search each question against Qdrant and store relevant text chunks"""
-        if not questions or self.question_embeddings is None:
+        if  self.question_embeddings is None:
             return
         
         self.retrieved_answers = []
@@ -226,7 +233,7 @@ class PDFProcessor:
             search_results = self.qdrant_client.search(
     collection_name=self.collection_name,
     query_vector=embedding.tolist(),
-    limit=4,
+    limit=3,
     with_payload=True,
     with_vectors=False,  # Don't return full vectors to reduce payload
     search_params=models.SearchParams(
@@ -260,7 +267,7 @@ class PDFProcessor:
             question = qa_pair['question']
             context = "\n\n".join(qa_pair['context'])
             questions_contexts += f"\n\n**Question {idx}:** {question}\n**Relevant Context:**\n{context}\n"
-        print(questions_contexts)
+        #print(questions_contexts)
         prompt = f"""
             Document Analysis Task
 
@@ -317,8 +324,8 @@ class PDFProcessor:
     def process_document(self, document_url: str):
         """Process document through the full pipeline"""
         try:
-            file_content, filetype = self.download_file(document_url)
-            text = self.extract_text(file_content, filetype)
+            file_content, filetype = self.download_file(document_url)#bytes,str
+            text = self.extract_text(file_content, filetype)#str
             
             self.chunks = self.chunk_text(text)
             if not self.chunks:
@@ -327,7 +334,10 @@ class PDFProcessor:
             self.document_embeddings = self.embedder.encode(
                 self.chunks,
                 convert_to_numpy=True,
-                normalize_embeddings=True
+                normalize_embeddings=True,
+                batch_size=256,
+                show_progress_bar=False,
+
             )
             print(f"Generated {len(self.document_embeddings)} document embeddings")
             
@@ -349,6 +359,7 @@ class PDFProcessor:
                 normalize_embeddings=True
             )
             print(f"Generated {len(self.question_embeddings)} question embeddings")
+            print(f"Question embeddings: {self.question_embeddings}")
         except Exception as e:
             print(f"Question processing failed: {e}")
             raise

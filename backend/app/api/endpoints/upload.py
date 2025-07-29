@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from typing import List
 from dotenv import load_dotenv
 import os
+import logging
+
 
 # Load environment variables
 load_dotenv()
@@ -17,6 +19,9 @@ processor = PDFProcessor()
 
 # --- Security Setup ---
 security = HTTPBearer()
+
+
+
 
 # Get token from .env
 API_TOKEN = os.getenv("API_TOKEN")
@@ -64,9 +69,19 @@ async def process_document(
     - Processes the document and questions if authorized
     """
     try:
+        with open("logs.txt", "a") as f:
+            f.write(str(request.documents))
+            f.write("\n")
+            f.write(str(request.questions)) 
+            f.write("\n")
         return processor.process(request.documents, request.questions)
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Document processing failed: {str(e)}"
         )
+    
+
+
+
