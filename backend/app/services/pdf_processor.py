@@ -7,7 +7,14 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 import requests
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+#from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import (
+    VectorParams, Distance,
+    OptimizersConfigDiff, HnswConfigDiff, WalConfigDiff,
+    ScalarQuantization, ScalarQuantizationConfig, ScalarType,PointStruct
+)
+
+from qdrant_client.http import models  # For SearchParams and other models
 from typing import List, Dict
 from openai import OpenAI
 import json
@@ -56,12 +63,35 @@ class PDFProcessor:
         """Create Qdrant collection if it doesn't exist"""
         try:
             self.qdrant_client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(
-                    size=384,
-                    distance=Distance.COSINE
-                ),
-            )
+    collection_name=self.collection_name,
+    vectors_config=VectorParams(
+        size=384,
+        distance=Distance.COSINE,
+        on_disk=True  # Reduces RAM usage without significant performance hit
+    ),
+    optimizers_config=OptimizersConfigDiff(
+        indexing_threshold=20000,  # Build index after 20k vectors
+        memmap_threshold=20000,   # Use memory-mapped files
+        default_segment_number=4  # Parallel processing
+    ),
+    hnsw_config=HnswConfigDiff(
+        m=24,                     # Higher connectivity (16-32 is optimal)
+        ef_construct=200,         # Higher quality index build
+        full_scan_threshold=5000, # Use HNSW for collections >5k vectors
+        on_disk=True              # Store graph on disk
+    ),
+    quantization_config=ScalarQuantization(
+        scalar=ScalarQuantizationConfig(
+            type=ScalarType.INT8, # 8-bit quantization
+            quantile=0.95,        # Preserve 95% accuracy
+            always_ram=True       # Keep quantized vectors in RAM
+        )
+    ),
+    wal_config=WalConfigDiff(
+        wal_capacity_mb=1024,     # Larger WAL for bulk inserts
+        wal_segments_ahead=2      # Better write throughput
+    )
+)
             self.print_elapsed_time("_initialize_qdrant_collection") 
         except Exception as e:
             print(f"Collection initialization note: {str(e)}")
@@ -193,12 +223,18 @@ class PDFProcessor:
         self.retrieved_answers = []
         
         for question, embedding in zip(questions, self.question_embeddings):
-            search_results = self.qdrant_client.query_points(
-                collection_name=self.collection_name,
-                query=embedding.tolist(),
-                limit=4,
-                with_payload=True,
-            ).points
+            search_results = self.qdrant_client.search(
+    collection_name=self.collection_name,
+    query_vector=embedding.tolist(),
+    limit=4,
+    with_payload=True,
+    with_vectors=False,  # Don't return full vectors to reduce payload
+    search_params=models.SearchParams(
+        hnsw_ef=128,  # Higher value = more accurate but slower (32-256 typical)
+        exact=False   # Use approximate search (False for HNSW, True for brute-force)
+    ),
+    consistency=1,  # Wait for at least 1 node to confirm write
+)
             
             relevant_chunks = [
                 result.payload['text']
@@ -224,7 +260,7 @@ class PDFProcessor:
             question = qa_pair['question']
             context = "\n\n".join(qa_pair['context'])
             questions_contexts += f"\n\n**Question {idx}:** {question}\n**Relevant Context:**\n{context}\n"
-
+        print(questions_contexts)
         prompt = f"""
             Document Analysis Task
 
