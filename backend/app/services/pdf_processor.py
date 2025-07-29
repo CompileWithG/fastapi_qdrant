@@ -233,7 +233,7 @@ class PDFProcessor:
             search_results = self.qdrant_client.search(
     collection_name=self.collection_name,
     query_vector=embedding.tolist(),
-    limit=3,
+    limit=4,
     with_payload=True,
     with_vectors=False,  # Don't return full vectors to reduce payload
     search_params=models.SearchParams(
