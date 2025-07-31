@@ -1,4 +1,6 @@
 # app/services/pdf_processor.py
+import json
+from pathlib import Path
 import fitz
 from docx import Document
 from io import BytesIO
@@ -28,11 +30,38 @@ from email.parser import BytesParser
 from urllib.parse import urlparse
 
 class PDFProcessor:
+    CACHE_FILE = "document_cache.json"
     def print_elapsed_time(self, message=""):
         elapsed = time.time() - self.start_time
         print(f"[+{elapsed:.2f}s] {message}")
+    def _load_cache(self) -> Dict[str, int]:
+        """Load URL to collection mapping from JSON file"""
+        try:
+            if self.cache_path.exists():
+                with open(self.cache_path, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading cache: {e}")
+        return {}
+
+    def _save_cache(self):
+        """Save current mapping to JSON file"""
+        try:
+            with open(self.cache_path, 'w') as f:
+                json.dump(self.url_to_collection, f, indent=2)
+        except Exception as e:
+            print(f"Error saving cache: {e}")
+
+    def _get_next_collection_id(self) -> int:
+        """Get the next available collection ID"""
+        if not self.url_to_collection:
+            return 1
+        return max(self.url_to_collection.values()) + 1
 
     def __init__(self):
+        self.cache_path = Path(__file__).parent / self.CACHE_FILE
+        self.url_to_collection = self._load_cache()
+        self.next_collection_id = self._get_next_collection_id()
         self.question=[]
         self.document_embeddings = None
         self.question_embeddings = None
@@ -405,17 +434,41 @@ class PDFProcessor:
 
     def process(self, document_url: str, questions: List[str]) -> Dict:
         """
-        Main processing method
-        Returns: Dictionary with "answers" key containing refined responses
+        Main processing method with document caching
         """
         try:
             if not document_url or not questions:
-                return {"answers": ["Invalid input. Please provide a valid document URL and questions."]}
-            self.process_document(document_url)
+                return {"answers": ["Invalid input"]}
+
+            # Check if document exists in cache
+            if document_url in self.url_to_collection:
+                # Use existing collection
+                self.collection_name = str(self.url_to_collection[document_url])
+                print(f"Reusing existing collection {self.collection_name}")
+            else:
+                # Create new collection entry
+                self.collection_name = str(self.next_collection_id)
+                self.url_to_collection[document_url] = self.next_collection_id
+                self.next_collection_id += 1
+                self._save_cache()
+                
+                # Process new document
+                file_content, filetype = self.download_file(document_url)
+                text = self.extract_text(file_content, filetype)
+                self.chunks = self.chunk_text(text)
+                
+                if not self.chunks:
+                    raise ValueError("No chunks generated")
+                
+                self.document_embeddings = self.embedder.encode(self.chunks)
+                self._initialize_qdrant_collection()
+                self.store_embeddings_in_qdrant()
+
+            # Common processing steps
             self.process_questions(questions)
             self.search_questions(questions)
-            self._clear_qdrant_collection()
             return self.refine_with_deepseek()
+            
         except Exception as e:
             print(f"Processing failed: {e}")
-            return {"answers": ["An error occurred during processing. Please try again later."]}
+            return {"answers": ["Error processing request"]}
