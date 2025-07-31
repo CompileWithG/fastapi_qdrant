@@ -336,7 +336,7 @@ class PDFProcessor:
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4.1",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=4000  # Reserve tokens for response
             )
@@ -353,7 +353,10 @@ class PDFProcessor:
         except Exception as e:
             print(f"Error generating answer with DeepSeek: {e}")
             self.final_answers = ["The document does not specify." for _ in self.retrieved_answers]
-
+        with open("logs.txt", "a") as f:
+            f.write("\n")
+            f.write(str(self.final_answers)) 
+            f.write("\n")
         return {"answers": self.final_answers}
 
     def process_document(self, document_url: str):
