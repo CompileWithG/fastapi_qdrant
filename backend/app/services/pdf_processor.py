@@ -83,7 +83,7 @@ class PDFProcessor:
         self.cache_path = Path(__file__).parent / self.CACHE_FILE
         self.qa_cache_path = Path(__file__).parent / self.QA_CACHE_FILE
         self.url_to_collection = self._load_cache()
-        self.qa_cache = self._load_cache()
+        self.qa_cache = self._load_qa_cache()
         self.next_collection_id = self._get_next_collection_id()
         self.question=[]
         self.document_embeddings = None
@@ -292,7 +292,7 @@ class PDFProcessor:
             search_results = self.qdrant_client.search(
             collection_name=self.collection_name,
             query_vector=embedding.tolist(),
-            limit=4,
+            limit=8,
             with_payload=True,
             with_vectors=False,  # Don't return full vectors to reduce payload
             search_params=models.SearchParams(
