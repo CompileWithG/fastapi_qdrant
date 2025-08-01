@@ -31,6 +31,7 @@ from urllib.parse import urlparse
 
 class PDFProcessor:
     CACHE_FILE = "document_cache.json"
+    QA_CACHE_FILE = "qa_cache.json"
     def print_elapsed_time(self, message=""):
         elapsed = time.time() - self.start_time
         print(f"[+{elapsed:.2f}s] {message}")
@@ -43,14 +44,34 @@ class PDFProcessor:
         except Exception as e:
             print(f"Error loading cache: {e}")
         return {}
+    
+    def _load_qa_cache(self) -> Dict[str, Dict[str, str]]:
+        try:
+            if self.qa_cache_path.exists():
+                with open(self.qa_cache_path, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading QA csche: {e}")
+        return {}
 
     def _save_cache(self):
         """Save current mapping to JSON file"""
         try:
             with open(self.cache_path, 'w') as f:
+                f.write('')
+            with open(self.cache_path, 'a') as f:
                 json.dump(self.url_to_collection, f, indent=2)
         except Exception as e:
             print(f"Error saving cache: {e}")
+    
+    def _save_qa_cache(self):
+        try:
+            with open(self.qa_cache_path, 'w') as f:
+                f.write('') 
+            with open(self.qa_cache_path, 'a') as f:
+                json.dump(self.qa_cache, f, indent=2)
+        except Exception as e:
+            print(f"Error saving QA cache: {e}")
 
     def _get_next_collection_id(self) -> int:
         """Get the next available collection ID"""
@@ -60,7 +81,9 @@ class PDFProcessor:
 
     def __init__(self):
         self.cache_path = Path(__file__).parent / self.CACHE_FILE
+        self.qa_cache_path = Path(__file__).parent / self.QA_CACHE_FILE
         self.url_to_collection = self._load_cache()
+        self.qa_cache = self._load_cache()
         self.next_collection_id = self._get_next_collection_id()
         self.question=[]
         self.document_embeddings = None
@@ -445,6 +468,52 @@ class PDFProcessor:
                 # Use existing collection
                 self.collection_name = str(self.url_to_collection[document_url])
                 print(f"Reusing existing collection {self.collection_name}")
+
+                cached_answers = []
+                new_questions = []
+                answer_indices = []
+
+                for idx, question in enumerate(questions):
+                    if str(self.url_to_collection[document_url]) in self.qa_cache and question in self.qa_cache[str(self.url_to_collection[document_url])]:
+                        cached_answers.append({
+                            'index': idx,
+                            'answer': self.qa_cache[str(self.url_to_collection[document_url])][question]
+                        })
+                    else:
+                        new_questions.append(question)
+                        answer_indices.append(idx)
+
+                # If all questions are cached, return them in order
+                if not new_questions:
+                    answers = [""] * len(questions)
+                    for item in cached_answers:
+                        answers[item['index']] = item['answer']
+                    return {"answers": answers}
+                # Process only new questions
+                self.process_questions(new_questions)
+                self.search_questions(new_questions)
+                new_answers = self.refine_with_deepseek()["answers"]
+
+                # Update QA cache with new question-answer pairs
+                if str(self.url_to_collection[document_url]) not in self.qa_cache:
+                    self.qa_cache[str(self.url_to_collection[document_url])] = {}
+                
+                for question, answer in zip(new_questions, new_answers):
+                    self.qa_cache[str(self.url_to_collection[document_url])][question] = answer
+                self._save_qa_cache()
+
+                combined_answers = [""] * len(questions)
+
+                # Add cached answers
+                for item in cached_answers:
+                    combined_answers[item['index']] = item['answer']
+
+                # Add new answers
+                for idx, answer in zip(answer_indices, new_answers):
+                    combined_answers[idx] = answer
+
+                return {"answers": combined_answers}
+
             else:
                 # Create new collection entry
                 self.collection_name = str(self.next_collection_id)
@@ -464,10 +533,16 @@ class PDFProcessor:
                 self._initialize_qdrant_collection()
                 self.store_embeddings_in_qdrant()
 
-            # Common processing steps
-            self.process_questions(questions)
-            self.search_questions(questions)
-            return self.refine_with_deepseek()
+                # Common processing steps
+                self.process_questions(questions)
+                self.search_questions(questions)
+                result= self.refine_with_deepseek()
+            
+                self.qa_cache[self.collection_name] = {
+                    q: a for q, a in zip(questions, result["answers"])
+                }
+                self._save_qa_cache()
+                return result
             
         except Exception as e:
             print(f"Processing failed: {e}")
