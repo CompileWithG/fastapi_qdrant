@@ -22,7 +22,7 @@ security = HTTPBearer()
 
 
 
-
+print("Test")
 # Get token from .env
 API_TOKEN = os.getenv("API_TOKEN")
 
