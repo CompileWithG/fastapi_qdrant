@@ -323,9 +323,27 @@ class PDFProcessor:
         if not self.retrieved_answers:
             return {"answers": []}
 
+        # If we have 6 or fewer questions, process them all at once
+        if len(self.retrieved_answers) <= 6:
+            return self._process_batch(self.retrieved_answers)
         
+        # For more than 6 questions, split into batches of 5
+        batch_size = 5
+        all_batches = []
+        for i in range(0, len(self.retrieved_answers), batch_size):
+            batch = self.retrieved_answers[i:i + batch_size]
+            all_batches.append(batch)
+        
+        # Process each batch and collect answers
+        final_answers = []
+        for batch in all_batches:
+            batch_result = self._process_batch(batch)
+            final_answers.extend(batch_result["answers"])
+        
+        return {"answers": final_answers}
 
-        # Calculate static prompt tokens (without the questions/context)
+    def _process_batch(self, batch: List[Dict]) -> Dict:
+        """Process a single batch of questions and contexts"""
         static_prompt_template = """
             Document Analysis Task
 
@@ -370,7 +388,7 @@ class PDFProcessor:
         included_questions = 0
         current_tokens = 0
 
-        for idx, qa_pair in enumerate(self.retrieved_answers, 1):
+        for idx, qa_pair in enumerate(batch, 1):
             question = qa_pair['question']
             context = "\n\n".join(qa_pair['context'])
             new_block = f"\n\n**Question {idx}:** {question}\n**Relevant Context:**\n{context}\n"
@@ -383,7 +401,6 @@ class PDFProcessor:
             current_tokens += new_block_tokens
             included_questions += 1
 
-        # Build the final prompt (unchanged from original)
         prompt = static_prompt_template.replace("{questions_contexts}", questions_contexts)
 
         try:
@@ -395,21 +412,23 @@ class PDFProcessor:
             
             self.print_elapsed_time("refine_with_llm")
             formatted_answer = response.choices[0].message.content
-            self.final_answers = json.loads(formatted_answer)
+            batch_answers = json.loads(formatted_answer)
             
             # Pad answers for excluded questions
-            remaining_answers = len(self.retrieved_answers) - included_questions
+            remaining_answers = len(batch) - included_questions
             if remaining_answers > 0:
-                self.final_answers.extend(["The document does not specify."] * remaining_answers)
+                batch_answers.extend(["The document does not specify."] * remaining_answers)
                 
         except Exception as e:
             print(f"Error generating answer with DeepSeek: {e}")
-            self.final_answers = ["The document does not specify." for _ in self.retrieved_answers]
+            batch_answers = ["The document does not specify." for _ in batch]
+            
         with open("logs.txt", "a") as f:
             f.write("\n")
-            f.write(str(self.final_answers)) 
+            f.write(str(batch_answers)) 
             f.write("\n")
-        return {"answers": self.final_answers}
+            
+        return {"answers": batch_answers}
 
     def process_document(self, document_url: str):
         """Process document through the full pipeline"""
