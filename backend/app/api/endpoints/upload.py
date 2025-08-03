@@ -20,8 +20,6 @@ processor = PDFProcessor()
 # --- Security Setup ---
 security = HTTPBearer()
 
-
-
 print("Test")
 # Get token from .env
 API_TOKEN = os.getenv("API_TOKEN")
@@ -74,14 +72,12 @@ async def process_document(
             f.write("\n")
             f.write(str(request.questions)) 
             f.write("\n")
-        return processor.process(request.documents, request.questions)
+        # Add await here since processor.process is now async
+        result = await processor.process(request.documents, request.questions)
+        return result
 
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Document processing failed: {str(e)}"
         )
-    
-
-
-

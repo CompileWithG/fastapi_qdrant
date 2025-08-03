@@ -9,16 +9,14 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 import requests
 from qdrant_client import QdrantClient
-#from qdrant_client.models import Distance, VectorParams, PointStruct
 from qdrant_client.models import (
     VectorParams, Distance,
     OptimizersConfigDiff, HnswConfigDiff, WalConfigDiff,
-    ScalarQuantization, ScalarQuantizationConfig, ScalarType,PointStruct
+    ScalarQuantization, ScalarQuantizationConfig, ScalarType, PointStruct
 )
-
-from qdrant_client.http import models  # For SearchParams and other models
+from qdrant_client.http import models
 from typing import List, Dict
-from openai import OpenAI
+from openai import AsyncOpenAI
 import json
 from dotenv import load_dotenv
 load_dotenv()
@@ -28,13 +26,16 @@ import urllib.parse
 from email import policy
 from email.parser import BytesParser
 from urllib.parse import urlparse
+import asyncio
 
 class PDFProcessor:
     CACHE_FILE = "document_cache.json"
     QA_CACHE_FILE = "qa_cache.json"
+    
     def print_elapsed_time(self, message=""):
         elapsed = time.time() - self.start_time
         print(f"[+{elapsed:.2f}s] {message}")
+    
     def _load_cache(self) -> Dict[str, int]:
         """Load URL to collection mapping from JSON file"""
         try:
@@ -51,7 +52,7 @@ class PDFProcessor:
                 with open(self.qa_cache_path, 'r') as f:
                     return json.load(f)
         except Exception as e:
-            print(f"Error loading QA csche: {e}")
+            print(f"Error loading QA cache: {e}")
         return {}
 
     def _save_cache(self):
@@ -85,7 +86,7 @@ class PDFProcessor:
         self.url_to_collection = self._load_cache()
         self.qa_cache = self._load_qa_cache()
         self.next_collection_id = self._get_next_collection_id()
-        self.question=[]
+        self.question = []
         self.document_embeddings = None
         self.question_embeddings = None
         self.chunks = None
@@ -94,12 +95,10 @@ class PDFProcessor:
         self.qdrant_client = QdrantClient(url="http://localhost:6333")
         self.collection_name = "document_chunks"
         self.retrieved_answers = []
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) 
-         # Initialize tokenizer (add this to your __init__ method)
+        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         if not hasattr(self, 'tokenizer'):
             from transformers import GPT2TokenizerFast
             self.tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-        #print("---------------------------------------------------------------------------------------------------")
         self._initialize_embedder()
         self._initialize_qdrant_collection()
 
@@ -113,7 +112,6 @@ class PDFProcessor:
                 backend="onnx",
                 model_kwargs={"file_name": "onnx/model_qint8_avx512.onnx"},
             )
-            #print("==================================================================================================================")
             self.print_elapsed_time("_initialize_embedder") 
         except Exception as e:
             print(f"Error initializing embedder: {e}")
@@ -123,36 +121,36 @@ class PDFProcessor:
         """Create Qdrant collection if it doesn't exist"""
         try:
             self.qdrant_client.create_collection(
-    collection_name=self.collection_name,
-    vectors_config=VectorParams(
-        size=384,
-        distance=Distance.COSINE,
-        on_disk=False # Reduces RAM usage without significant performance hit
-    ),
-    optimizers_config=OptimizersConfigDiff(
-        indexing_threshold=0,  # Build index after 20k vectors
-        memmap_threshold=0,   # Use memory-mapped files
-        default_segment_number=8,
-        max_optimization_threads=4  # Parallel processing
-    ),
-    hnsw_config=HnswConfigDiff(
-        m=24,                     # Higher connectivity (16-32 is optimal)
-        ef_construct=75,         # Higher quality index build
-        full_scan_threshold=5000, # Use HNSW for collections >5k vectors
-        on_disk=False            # Store graph on disk
-    ),
-    quantization_config=ScalarQuantization(
-        scalar=ScalarQuantizationConfig(
-            type=ScalarType.INT8, # 8-bit quantization
-            quantile=0.95,        # Preserve 95% accuracy
-            always_ram=True       # Keep quantized vectors in RAM
-        )
-    ),
-    wal_config=WalConfigDiff(
-        wal_capacity_mb=1024,     # Larger WAL for bulk inserts
-        wal_segments_ahead=2      # Better write throughput
-    )
-)
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(
+                    size=384,
+                    distance=Distance.COSINE,
+                    on_disk=False
+                ),
+                optimizers_config=OptimizersConfigDiff(
+                    indexing_threshold=0,
+                    memmap_threshold=0,
+                    default_segment_number=8,
+                    max_optimization_threads=4
+                ),
+                hnsw_config=HnswConfigDiff(
+                    m=24,
+                    ef_construct=75,
+                    full_scan_threshold=5000,
+                    on_disk=False
+                ),
+                quantization_config=ScalarQuantization(
+                    scalar=ScalarQuantizationConfig(
+                        type=ScalarType.INT8,
+                        quantile=0.95,
+                        always_ram=True
+                    )
+                ),
+                wal_config=WalConfigDiff(
+                    wal_capacity_mb=1024,
+                    wal_segments_ahead=2
+                )
+            )
             self.print_elapsed_time("_initialize_qdrant_collection") 
         except Exception as e:
             print(f"Collection initialization note: {str(e)}")
@@ -160,8 +158,9 @@ class PDFProcessor:
     def _clear_qdrant_collection(self):
         """Delete all vectors from the Qdrant collection"""
         try:
-            self.qdrant_client.delete(collection_name=self.collection_name,points_selector=models.FilterSelector(filter=models.Filter()  # Empty filter matches all points
-                )
+            self.qdrant_client.delete(
+                collection_name=self.collection_name,
+                points_selector=models.FilterSelector(filter=models.Filter())
             )       
             print(f"Cleared vectors inside : {self.collection_name}")
         except Exception as e:
@@ -199,7 +198,7 @@ class PDFProcessor:
                 elif path.endswith('.eml'):
                     filetype = 'eml'
                 else:
-                    filetype = 'pdf'  # Default assumption
+                    filetype = 'pdf'
             self.print_elapsed_time("download_file")
             return response.content, filetype
         except Exception as e:
@@ -210,23 +209,19 @@ class PDFProcessor:
         """Extract text from bytes based on filetype"""
         try:
             if filetype == 'pdf':
-                #pdf processing
                 text = ""
                 with fitz.open(stream=content, filetype="pdf") as doc:
                     for page in doc:
                         text += page.get_text()
-                #print(text)
                 return text
             
             elif filetype in ['docx', 'doc']:
-                #doc processing
                 doc = Document(BytesIO(content))
                 return '\n'.join([para.text for para in doc.paragraphs])
             
             elif filetype == 'eml':
                 msg = BytesParser(policy=policy.default).parsebytes(content)
                 text = ""
-                #email processing
                 if msg.is_multipart():
                     for part in msg.walk():
                         content_type = part.get_content_type()
@@ -254,15 +249,12 @@ class PDFProcessor:
             keep_separator=False
         )
         self.print_elapsed_time("chunk_text")
-        #print(text_splitter.split_text(text))
         return text_splitter.split_text(text)
 
     def store_embeddings_in_qdrant(self):
         """Store document chunks and embeddings in Qdrant"""
-        if  self.document_embeddings is None:
+        if self.document_embeddings is None:
             raise ValueError("No document chunks or embeddings to store")
-        
-        
         
         points = [
             PointStruct(
@@ -276,32 +268,31 @@ class PDFProcessor:
         operation_info = self.qdrant_client.upsert(
             collection_name=self.collection_name,
             points=points,
-            wait=False,  # Use False for bulk inserts to improve performance
+            wait=False,
         )
         print(f"Stored {len(points)} document chunks in Qdrant")
         self.print_elapsed_time("store_embeddings_in_qdrant")
 
     def search_questions(self, questions: List[str]) -> None:
         """Search each question against Qdrant and store relevant text chunks"""
-        if  self.question_embeddings is None:
+        if self.question_embeddings is None:
             return
         
         self.retrieved_answers = []
         
         for question, embedding in zip(questions, self.question_embeddings):
             search_results = self.qdrant_client.search(
-            collection_name=self.collection_name,
-            query_vector=embedding.tolist(),
-            limit=8,
-            with_payload=True,
-            with_vectors=False,  # Don't return full vectors to reduce payload
-            search_params=models.SearchParams(
-            hnsw_ef=32,  # Higher value = more accurate but slower (32-256 typical)
-            exact=False   # Use approximate search (False for HNSW, True for brute-force)
-            ),
-            consistency="majority",  # Wait for at least 1 node to confirm write
+                collection_name=self.collection_name,
+                query_vector=embedding.tolist(),
+                limit=8,
+                with_payload=True,
+                with_vectors=False,
+                search_params=models.SearchParams(
+                    hnsw_ef=32,
+                    exact=False
+                ),
+                consistency="majority",
             )
-            relevant_chunks = []
             relevant_chunks = [
                 result.payload['text']
                 for result in search_results
@@ -313,37 +304,38 @@ class PDFProcessor:
                 'context': relevant_chunks
             })
 
-        
         print(f"Retrieved context for {len(questions)} questions")
         self.print_elapsed_time("search_questions")
-        #print(f"Retrieved answers: {self.retrieved_answers}")
 
-    def refine_with_deepseek(self) -> Dict:
-        """Use DeepSeek to generate answers for all questions in one go"""
+    async def refine_with_deepseek(self) -> Dict:
+        """Use DeepSeek to generate answers for all questions in parallel batches"""
         if not self.retrieved_answers:
             return {"answers": []}
 
-        # If we have 6 or fewer questions, process them all at once
+        # If we have 8 or fewer questions, process them all at once
         if len(self.retrieved_answers) <= 8:
-            return self._process_batch(self.retrieved_answers)
+            return await self._process_batch(self.retrieved_answers)
         
-        # For more than 6 questions, split into batches of 5
+        # For more than 8 questions, split into batches of 7
         batch_size = 7
         all_batches = []
         for i in range(0, len(self.retrieved_answers), batch_size):
             batch = self.retrieved_answers[i:i + batch_size]
             all_batches.append(batch)
         
-        # Process each batch and collect answers
+        # Process all batches in parallel
+        batch_tasks = [self._process_batch(batch) for batch in all_batches]
+        batch_results = await asyncio.gather(*batch_tasks)
+        
+        # Combine all answers in order
         final_answers = []
-        for batch in all_batches:
-            batch_result = self._process_batch(batch)
-            final_answers.extend(batch_result["answers"])
+        for result in batch_results:
+            final_answers.extend(result["answers"])
         
         return {"answers": final_answers}
 
-    def _process_batch(self, batch: List[Dict]) -> Dict:
-        """Process a single batch of questions and contexts"""
+    async def _process_batch(self, batch: List[Dict]) -> Dict:
+        """Process a single batch of questions and contexts asynchronously"""
         static_prompt_template = """
             Document Analysis Task
 
@@ -382,7 +374,7 @@ class PDFProcessor:
             """
         
         static_tokens = len(self.tokenizer.encode(static_prompt_template.replace("{questions_contexts}", "")))
-        max_available_tokens = 16385 - static_tokens - 500  # 500 token buffer for response
+        max_available_tokens = 16385 - static_tokens - 500
 
         questions_contexts = ""
         included_questions = 0
@@ -404,17 +396,16 @@ class PDFProcessor:
         prompt = static_prompt_template.replace("{questions_contexts}", questions_contexts)
 
         try:
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model="gpt-4.1",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=4000  # Reserve tokens for response
+                max_tokens=4000
             )
             
             self.print_elapsed_time("refine_with_llm")
             formatted_answer = response.choices[0].message.content
             batch_answers = json.loads(formatted_answer)
             
-            # Pad answers for excluded questions
             remaining_answers = len(batch) - included_questions
             if remaining_answers > 0:
                 batch_answers.extend(["The document does not specify."] * remaining_answers)
@@ -433,8 +424,8 @@ class PDFProcessor:
     def process_document(self, document_url: str):
         """Process document through the full pipeline"""
         try:
-            file_content, filetype = self.download_file(document_url)#bytes,str
-            text = self.extract_text(file_content, filetype)#str
+            file_content, filetype = self.download_file(document_url)
+            text = self.extract_text(file_content, filetype)
             
             self.chunks = self.chunk_text(text)
             if not self.chunks:
@@ -446,7 +437,6 @@ class PDFProcessor:
                 normalize_embeddings=True,
                 batch_size=256,
                 show_progress_bar=False,
-
             )
             print(f"Generated {len(self.document_embeddings)} document embeddings")
             
@@ -474,7 +464,7 @@ class PDFProcessor:
             print(f"Question processing failed: {e}")
             raise
 
-    def process(self, document_url: str, questions: List[str]) -> Dict:
+    async def process(self, document_url: str, questions: List[str]) -> Dict:
         """
         Main processing method with document caching
         """
@@ -484,7 +474,6 @@ class PDFProcessor:
 
             # Check if document exists in cache
             if document_url in self.url_to_collection:
-                # Use existing collection
                 self.collection_name = str(self.url_to_collection[document_url])
                 print(f"Reusing existing collection {self.collection_name}")
 
@@ -502,18 +491,16 @@ class PDFProcessor:
                         new_questions.append(question)
                         answer_indices.append(idx)
 
-                # If all questions are cached, return them in order
                 if not new_questions:
                     answers = [""] * len(questions)
                     for item in cached_answers:
                         answers[item['index']] = item['answer']
                     return {"answers": answers}
-                # Process only new questions
+                
                 self.process_questions(new_questions)
                 self.search_questions(new_questions)
-                new_answers = self.refine_with_deepseek()["answers"]
+                new_answers = (await self.refine_with_deepseek())["answers"]
 
-                # Update QA cache with new question-answer pairs
                 if str(self.url_to_collection[document_url]) not in self.qa_cache:
                     self.qa_cache[str(self.url_to_collection[document_url])] = {}
                 
@@ -523,24 +510,20 @@ class PDFProcessor:
 
                 combined_answers = [""] * len(questions)
 
-                # Add cached answers
                 for item in cached_answers:
                     combined_answers[item['index']] = item['answer']
 
-                # Add new answers
                 for idx, answer in zip(answer_indices, new_answers):
                     combined_answers[idx] = answer
 
                 return {"answers": combined_answers}
 
             else:
-                # Create new collection entry
                 self.collection_name = str(self.next_collection_id)
                 self.url_to_collection[document_url] = self.next_collection_id
                 self.next_collection_id += 1
                 self._save_cache()
                 
-                # Process new document
                 file_content, filetype = self.download_file(document_url)
                 text = self.extract_text(file_content, filetype)
                 self.chunks = self.chunk_text(text)
@@ -552,10 +535,9 @@ class PDFProcessor:
                 self._initialize_qdrant_collection()
                 self.store_embeddings_in_qdrant()
 
-                # Common processing steps
                 self.process_questions(questions)
                 self.search_questions(questions)
-                result= self.refine_with_deepseek()
+                result = await self.refine_with_deepseek()
             
                 self.qa_cache[self.collection_name] = {
                     q: a for q, a in zip(questions, result["answers"])
