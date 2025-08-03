@@ -324,11 +324,11 @@ class PDFProcessor:
             return {"answers": []}
 
         # If we have 6 or fewer questions, process them all at once
-        if len(self.retrieved_answers) <= 6:
+        if len(self.retrieved_answers) <= 8:
             return self._process_batch(self.retrieved_answers)
         
         # For more than 6 questions, split into batches of 5
-        batch_size = 5
+        batch_size = 7
         all_batches = []
         for i in range(0, len(self.retrieved_answers), batch_size):
             batch = self.retrieved_answers[i:i + batch_size]
