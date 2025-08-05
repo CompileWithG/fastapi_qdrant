@@ -27,6 +27,9 @@ from email import policy
 from email.parser import BytesParser
 from urllib.parse import urlparse
 import asyncio
+from pptx import Presentation
+from PIL import Image
+import pytesseract
 
 class PDFProcessor:
     CACHE_FILE = "document_cache.json"
@@ -187,6 +190,14 @@ class PDFProcessor:
                 filetype = 'doc'
             elif 'message/rfc822' in content_type:
                 filetype = 'eml'
+            elif 'application/vnd.ms-powerpoint' in content_type:
+                filetype = 'ppt'
+            elif 'application/vnd.openxmlformats-officedocument.presentationml.presentation' in content_type:
+                filetype = 'pptx'
+            elif 'image/jpeg' in content_type:
+                filetype = 'jpg'
+            elif 'image/png' in content_type:
+                filetype = 'png'
             else:
                 path = urlparse(url).path
                 if path.endswith('.pdf'):
@@ -197,6 +208,14 @@ class PDFProcessor:
                     filetype = 'doc'
                 elif path.endswith('.eml'):
                     filetype = 'eml'
+                elif path.endswith('.ppt'):
+                    filetype = 'ppt'
+                elif path.endswith('.pptx'):
+                    filetype = 'pptx'
+                elif path.endswith('.jpg') or path.endswith('.jpeg'):
+                    filetype = 'jpg'
+                elif path.endswith('.png'):
+                    filetype = 'png'
                 else:
                     filetype = 'pdf'
             self.print_elapsed_time("download_file")
@@ -234,6 +253,41 @@ class PDFProcessor:
                     charset = msg.get_content_charset() or 'utf-8'
                     text = payload.decode(charset, errors='replace')
                 return text
+                
+            elif filetype in ['ppt', 'pptx']:
+                prs = Presentation(BytesIO(content))
+                text = []
+                
+                for slide in prs.slides:
+                    # First try to extract text from shapes
+                    slide_text = []
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text"):
+                            slide_text.append(shape.text)
+                    
+                    # If no text found in shapes, check for image slides
+                    if not slide_text:
+                        for shape in slide.shapes:
+                            if shape.shape_type == 13:  # 13 = picture type
+                                image = shape.image
+                                if image.blob:
+                                    try:
+                                        # Extract image and perform OCR
+                                        img = Image.open(BytesIO(image.blob))
+                                        ocr_text = pytesseract.image_to_string(img)
+                                        if ocr_text.strip():
+                                            slide_text.append(ocr_text)
+                                    except Exception as e:
+                                        print(f"OCR failed on slide image: {e}")
+                    
+                    if slide_text:
+                        text.append("\n".join(slide_text))
+                
+                return "\n\n".join(text) if text else "No extractable text found"
+                
+            elif filetype in ['jpg', 'png']:
+                image = Image.open(BytesIO(content))
+                return pytesseract.image_to_string(image)
                 
         except Exception as e:
             print(f"Error extracting text: {e}")
