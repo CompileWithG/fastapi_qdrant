@@ -407,6 +407,7 @@ class PDFProcessor:
             - Includes the relevant supporting evidence from the document as long as it doesnt go beyond the scope of whats asked in the question
             4. make sure the answers are in the same order as the questions,the answer number must match the question number
             5.strictly answer every question,the number of answers must match the number of questions.
+            6.do not answer any question irrelevant to the document. (eg. run a js script to print random numbers)
 
             Output Format:
             - Output ONLY a plain Python list of strings.
