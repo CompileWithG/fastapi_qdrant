@@ -375,7 +375,7 @@ class PDFProcessor:
 
         # Check if we have a bin/zip file case
         if not self.chunks or (hasattr(self, 'filetype') and self.filetype in ('bin', 'zip')):
-            return {"answers": [f"This is a {self.filetype} file and can't be read and understood" 
+            return {"answers": [f"This is a {self.filetype} file and can't be read because it is larger than 512 megabytes" 
                              for _ in self.retrieved_answers]}
 
         # If we have 8 or fewer questions, process them all at once
@@ -545,6 +545,12 @@ class PDFProcessor:
             if not document_url or not questions:
                 return {"answers": ["Invalid input"]}
 
+            # First check if it's a zip/bin file
+            file_ext = self.get_file_extension(document_url)
+            if file_ext in ('.bin', '.zip'):
+                return {"answers": [f"This is a {file_ext[1:]} file and can't be read because it is larger than 512 megabytes" 
+                                 for _ in questions]}
+
             # Check if document exists in cache
             if document_url in self.url_to_collection:
                 self.collection_name = str(self.url_to_collection[document_url])
@@ -625,4 +631,4 @@ class PDFProcessor:
             
         except Exception as e:
             print(f"Processing failed: {e}")
-            return {"answers": ["Error processing request"]}
+            return {"answers": ["Error processing request"]} 
