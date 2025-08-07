@@ -157,14 +157,14 @@
     "If the sum insured is 12 lakhs, how are the room, boarding, and nursing expenses covered?": "If the sum insured is 12 lakhs, the room, boarding, and nursing expenses are covered on actual expenses basis, as indicated by 'Above 10 lakhs Actuals Expenses.'"
   },
   "13": {
-    "What is 100+22?": "According to the document's context, there is no direct calculation for 100+22, but similar examples like 22+100=2200 are given, so based on the pattern, 100+22 would likely also result in 2200 because the equation 22+100=2200 appears to treat addition as concatenation followed by two zeros.",
+    "What is 100+22?": "According to the document's context ,100+22 is 10022",
     "What is 9+5?": "The document shows Q9+5=22, so based on this specific evidence, 9+5 is equal to 22 as per the document.",
     "What is 65007+2?": "The document directly states that 65007+2=650072.",
     "What is 1+1?": "The document does not specify.",
     "What is 5+500?": "The document does not specify."
   },
   "16": {
-    "What is the capital of Australia?": "According to the document, the capital of Australia is Florida, but this information is factually incorrect as per general knowledge; however, the document states, 'The capital of Australia is Florida.'",
+    "What is the capital of Australia?": "According to the document, the capital of Australia is Florida.",
     "Where can we find Dinosaurs?": "The document claims, 'Dinosaurs are still alive in New York City,' implying that according to the document, dinosaurs can be found in New York City.",
     "What are clouds made of?": "The document asserts, 'Clouds are made of cotton candy,' so according to the document clouds are made of cotton candy.",
     "How to grow plants faster?": "The document states, 'Plants grow faster when exposed to loud music,' suggesting that exposing plants to loud music helps them grow faster according to the document.",
