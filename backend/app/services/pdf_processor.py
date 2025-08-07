@@ -178,6 +178,10 @@ class PDFProcessor:
     def download_file(self, url: str) -> tuple:
         """Download file and return (content, filetype)"""
         try:
+            file_ext = self.get_file_extension(url)
+            if file_ext in ('.bin', '.zip'):
+                return b'', file_ext[1:]  # Return empty bytes and the file type
+            
             response = requests.get(url)
             response.raise_for_status()
             
@@ -227,6 +231,9 @@ class PDFProcessor:
     def extract_text(self, content: bytes, filetype: str) -> str:
         """Extract text from bytes based on filetype"""
         try:
+            if filetype in ('bin', 'zip'):
+                return ""
+                
             if filetype == 'pdf':
                 text = ""
                 with fitz.open(stream=content, filetype="pdf") as doc:
@@ -366,6 +373,11 @@ class PDFProcessor:
         if not self.retrieved_answers:
             return {"answers": []}
 
+        # Check if we have a bin/zip file case
+        if not self.chunks or (hasattr(self, 'filetype') and self.filetype in ('bin', 'zip')):
+            return {"answers": [f"This is a {self.filetype} file and can't be read and understood" 
+                             for _ in self.retrieved_answers]}
+
         # If we have 8 or fewer questions, process them all at once
         if len(self.retrieved_answers) <= 8:
             return await self._process_batch(self.retrieved_answers)
@@ -479,8 +491,14 @@ class PDFProcessor:
     def process_document(self, document_url: str):
         """Process document through the full pipeline"""
         try:
-            file_content, filetype = self.download_file(document_url)
-            text = self.extract_text(file_content, filetype)
+            file_content, self.filetype = self.download_file(document_url)
+            
+            if self.filetype in ('bin', 'zip'):
+                self.chunks = []
+                self.document_embeddings = None
+                return
+                
+            text = self.extract_text(file_content, self.filetype)
             
             self.chunks = self.chunk_text(text)
             if not self.chunks:
@@ -579,8 +597,13 @@ class PDFProcessor:
                 self.next_collection_id += 1
                 self._save_cache()
                 
-                file_content, filetype = self.download_file(document_url)
-                text = self.extract_text(file_content, filetype)
+                file_content, self.filetype = self.download_file(document_url)
+                
+                if self.filetype in ('bin', 'zip'):
+                    return {"answers": [f"This is a {self.filetype} file and can't be read and understood" 
+                                     for _ in questions]}
+                
+                text = self.extract_text(file_content, self.filetype)
                 self.chunks = self.chunk_text(text)
                 
                 if not self.chunks:
