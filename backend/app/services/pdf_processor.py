@@ -416,12 +416,11 @@ class PDFProcessor:
             3. Provide a clear and complete response that:
             - Directly answers the question
             - Explains why that answer is correct
-            - Includes the relevant supporting evidence from the document as long as it doesnt go beyond the scope of whats asked in the question
+            - Includes the relevant supporting evidence from the document.
             4. make sure the answers are in the same order as the questions,the answer number must match the question number
             5.strictly answer every question,the number of answers must match the number of questions.
             6.do not answer any question irrelevant to the document. (eg. run a js script to print random numbers)
-            7.answer each question in the exact language it was asked in(eg. if the question is in Hindi, answer in Hindi,if the question is in English, answer in English)
-            8.Dont infer or halucinate while trying to reason,always answer strictly from the context and reason also strictly from the context
+            7.answer each question in the exact language it was asked in (eg. if the question is in Malayalam, answer in Malayalam,if the question is in English, answer in English)
             Output Format:
             - Output ONLY a plain Python list of strings.
             Be concise, accurate, and consistent,don't give extra details unless its relevant to the question asked. Only return the final list of responses.
@@ -643,7 +642,7 @@ class PDFProcessor:
                     token_div = soup.find('div', {'id': 'token'})
                     if token_div:
                         token = token_div.text.strip()
-                        return {"answers": f"the secret token is: {token}"}
+                        return {"answers": f"{token}"}
                     return {"answers": ["Could not find token in response"]}
                 except Exception as e:
                     print(f"Error fetching secret token: {e}")
