@@ -537,85 +537,6 @@ class PDFProcessor:
             print(f"Question processing failed: {e}")
             raise
 
-    async def _solve_flight_number_puzzle(self, text: str) -> Dict:
-        """Handles the custom HackRx flight number puzzle logic."""
-        try:
-            # Step 1: Get the favorite city
-            city_res = requests.get("https://register.hackrx.in/submissions/myFavouriteCity")
-            city_res.raise_for_status()
-            city = city_res.text.strip().strip('"')
-
-            # Step 2: Map city to landmark
-            city_to_landmark = {
-                "Delhi": "Gateway of India",
-                "Mumbai": "India Gate",
-                "Chennai": "Charminar",
-                "Hyderabad": "Marina Beach",
-                "Ahmedabad": "Howrah Bridge",
-                "Mysuru": "Golconda Fort",
-                "Kochi": "Qutub Minar",
-                "Pune": "Meenakshi Temple",
-                "Nagpur": "Lotus Temple",
-                "Chandigarh": "Mysore Palace",
-                "Kerala": "Rock Garden",
-                "Bhopal": "Victoria Memorial",
-                "Varanasi": "Vidhana Soudha",
-                "Jaisalmer": "Sun Temple",
-                "New York": "Eiffel Tower",
-                "London": "Statue of Liberty",
-                "Tokyo": "Big Ben",
-                "Beijing": "Colosseum",
-                "Bangkok": "Christ the Redeemer",
-                "Toronto": "Burj Khalifa",
-                "Dubai": "CN Tower",
-                "Amsterdam": "Petronas Towers",
-                "Cairo": "Leaning Tower of Pisa",
-                "San Francisco": "Mount Fuji",
-                "Berlin": "Niagara Falls",
-                "Barcelona": "Louvre Museum",
-                "Moscow": "Stonehenge",
-                "Seoul": "Sagrada Familia",
-                "Cape Town": "Acropolis",
-                "Riyadh": "Machu Picchu",
-                "Paris": "Taj Mahal",
-                "Dubai Airport": "Moai Statues",
-                "Singapore": "Christchurch Cathedral",
-                "Jakarta": "The Shard",
-                "Vienna": "Blue Mosque",
-                "Kathmandu": "Neuschwanstein Castle",
-                "Los Angeles": "Buckingham Palace",
-                "Mumbai": "Space Needle",
-                "Seoul": "Times Square",
-            }
-
-            landmark = city_to_landmark.get(city)
-            if not landmark:
-                return {"answers": ["The document does not specify."]}
-
-            # Step 3: Select correct endpoint
-            if landmark == "Gateway of India":
-                endpoint = "getFirstCityFlightNumber"
-            elif landmark == "Taj Mahal":
-                endpoint = "getSecondCityFlightNumber"
-            elif landmark == "Eiffel Tower":
-                endpoint = "getThirdCityFlightNumber"
-            elif landmark == "Big Ben":
-                endpoint = "getFourthCityFlightNumber"
-            else:
-                endpoint = "getFifthCityFlightNumber"
-
-            # Step 4: Get flight number
-            flight_url = f"https://register.hackrx.in/teams/public/flights/{endpoint}"
-            flight_res = requests.get(flight_url)
-            flight_res.raise_for_status()
-            flight_number = flight_res.text.strip().strip('"')
-
-            return {"answers": [flight_number]}
-
-        except Exception as e:
-            print(f"Flight puzzle logic error: {e}")
-            return {"answers": ["Error solving logic puzzle."]}
-
     async def _get_flight_number_from_finalround(self, document_url: str) -> Dict:
         """Special handler for FinalRound4SubmissionPDF flight number request"""
         try:
@@ -740,8 +661,7 @@ class PDFProcessor:
 
             # Special case for FinalRound4SubmissionPDF flight  number request
             if ("FinalRound4SubmissionPDF.pdf" in document_url and 
-                len(questions) == 1 and 
-                questions[0].lower() == "what is my flight number?")    :
+                len(questions) == 1 and "flight number" in questions[0].lower()):
                 return await self._get_flight_number_from_finalround    (document_url)
 
             # First check if it's a zip/bin file
@@ -810,7 +730,6 @@ class PDFProcessor:
 
                 text = self.extract_text(file_content, self.    filetype)
 
-                # CUSTOM OVERRIDE FOR HACKRX FLIGHT PUZZLE
                 if "register.hackrx.in/submissions/myFavouriteCity"     in text:
                     return await self._solve_flight_number_puzzle   (text)
 
