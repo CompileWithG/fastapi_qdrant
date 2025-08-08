@@ -639,7 +639,7 @@ class PDFProcessor:
                 return {"answers": ["Invalid input"]}
 
             # Handle secret token request case
-            if document_url == "https://register.hackrx.in/utils/get-secret-token?hackTeam=1047":
+            if document_url.startswith("https://register.hackrx.in/utils/get-secret-token?"):
                 try:
                     response = requests.get(document_url)
                     response.raise_for_status()
