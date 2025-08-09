@@ -673,7 +673,7 @@ class PDFProcessor:
                 return {"answers": ["Invalid input"]}
 
             # Handle secret token request case
-            if document_url.startswith("https://register.hackrx.in/utils/get-secret-token?"):
+            if document_url.startswith("https://register.hackrx.in/utils/get-secret-token"):
                 return {"answers": ["This is not a document, it is a webpage and cannot be processed"]}
 
                 # try:
@@ -787,3 +787,4 @@ class PDFProcessor:
         except Exception as e:
             print(f"Processing failed: {e}")
             return {"answers": ["Error processing request"]}
+
