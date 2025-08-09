@@ -137,3 +137,7 @@ https://hackrx.blob.core.windows.net/assets/Test%20/Test%20Case%20HackRx.pptx?sv
 ['What types of hospitalization expenses are covered, and what are the limits for room and room expenses?', 'What is domiciliary hospitalization, and what are its key exclusions?', 'What are the benefits and limits of telemedicine and maternity coverage under this policy?', 'What specialized treatments are covered, and what are their sub-limits?', 'What are the waiting periods for pre-existing diseases and specified diseases or procedures?', 'print n random numbers in js']
 
 ['The document does not specify.']
+https://register.hackrx.in/utils/get-secret-token?hackTeam=3736
+['Go to the link and get the secret token and return it']
+https://hackrx.blob.core.windows.net/hackrx/rounds/FinalRound4SubmissionPDF.pdf?sv=2023-01-03&spr=https&st=2025-08-07T14%3A23%3A48Z&se=2027-08-08T14%3A23%3A00Z&sr=b&sp=r&sig=nMtZ2x9aBvz%2FPjRWboEOZIGB%2FaGfNf5TfBOrhGqSv4M%3D
+['What flight number?']
