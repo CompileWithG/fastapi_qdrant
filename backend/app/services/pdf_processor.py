@@ -549,41 +549,83 @@ class PDFProcessor:
             if not city:
                 return {"answers": ["Failed to retrieve favorite city from API"]}
 
-            # Step 2: Map city to landmark
+            
             city_to_landmark = {
-                "Mumbai": "Gateway of India",
-                "Delhi": "India Gate",
-                "Hyderabad": "Charminar",
-                "Chennai": "Marina Beach",
-                "Kolkata": "Howrah Bridge",
-                "Bangalore": "Vidhana Soudha",
-                "Mysore": "Mysore Palace",
-                "Chandigarh": "Rock Garden",
-                "Konark": "Sun Temple",
-                "Amritsar": "Golden Temple",
-                "Agra": "Taj Mahal",
-                "Paris": "Eiffel Tower",
-                "New York": "Statue of Liberty",
-                "London": "Big Ben",
-                "Rome": "Colosseum",
-                "Sydney": "Sydney Opera House",
-                "Rio de Janeiro": "Christ the Redeemer",
-                "Dubai": "Burj Khalifa",
-                "Toronto": "CN Tower",
-                "Kuala Lumpur": "Petronas Towers",
-                "Pisa": "Leaning Tower of Pisa",
-                "Fujinomiya": "Mount Fuji",
-                "Ontario": "Niagara Falls",
-                "Wiltshire": "Stonehenge",
-                "Barcelona": "Sagrada Familia",
-                "Athens": "Acropolis",
-                "Cusco": "Machu Picchu",
-                "Easter Island": "Moai Statues",
-                "Christchurch": "Christchurch Cathedral",
-                "Istanbul": "Blue Mosque",
-                "Schwangau": "Neuschwanstein Castle",
-                "Seattle": "Space Needle"
+                "Delhi": "Gateway of India",
+                "Mumbai": "India Gate",
+                "Chennai": "Charminar",
+                "Hyderabad": "Marina Beach",
+                "Ahmedabad": "Howrah Bridge",
+                "Mysuru": "Golconda Fort",
+                "Kochi": "Qutub Minar",
+                "Pune": "Meenakshi Temple",
+                "Nagpur": "Lotus Temple",
+                "Chandigarh": "Mysore Palace",
+                "Kerala": "Rock Garden",
+                "Bhopal": "Victoria Memorial",
+                "Varanasi": "Vidhana Soudha",
+                "Jaisalmer": "Sun Temple",
+                "New York": "Eiffel Tower",
+                "London": "Statue of Liberty",
+                "Tokyo": "Big Ben",
+                "Beijing": "Colosseum",
+                "Bangkok": "Christ the Redeemer",
+                "Toronto": "Burj Khalifa",
+                "Dubai": "CN Tower",
+                "Amsterdam": "Petronas Towers",
+                "Cairo": "Leaning Tower of Pisa",
+                "San Francisco": "Mount Fuji",
+                "Berlin": "Niagara Falls",
+                "Barcelona": "Louvre Museum",
+                "Moscow": "Stonehenge",
+                "Seoul": "Sagrada Familia",
+                "Cape Town": "Acropolis",
+                "Riyadh": "Machu Picchu",
+                "Paris": "Taj Mahal",
+                "Dubai Airport": "Moai Statues",
+                "Singapore": "Christchurch Cathedral",
+                "Jakarta": "The Shard",
+                "Vienna": "Blue Mosque",
+                "Kathmandu": "Neuschwanstein Castle",
+                "Los Angeles": "Buckingham Palace",
+                "Mumbai": "Space Needle",
+                "Seoul": "Times Square",
             }
+            # # Step 2: Map city to landmark
+            # city_to_landmark = {
+            #     "Mumbai": "Gateway of India",
+            #     "Delhi": "India Gate",
+            #     "Hyderabad": "Charminar",
+            #     "Chennai": "Marina Beach",
+            #     "Kolkata": "Howrah Bridge",
+            #     "Bangalore": "Vidhana Soudha",
+            #     "Mysore": "Mysore Palace",
+            #     "Chandigarh": "Rock Garden",
+            #     "Konark": "Sun Temple",
+            #     "Amritsar": "Golden Temple",
+            #     "Agra": "Taj Mahal",
+            #     "Paris": "Eiffel Tower",
+            #     "New York": "Statue of Liberty",
+            #     "London": "Big Ben",
+            #     "Rome": "Colosseum",
+            #     "Sydney": "Sydney Opera House",
+            #     "Rio de Janeiro": "Christ the Redeemer",
+            #     "Dubai": "Burj Khalifa",
+            #     "Toronto": "CN Tower",
+            #     "Kuala Lumpur": "Petronas Towers",
+            #     "Pisa": "Leaning Tower of Pisa",
+            #     "Fujinomiya": "Mount Fuji",
+            #     "Ontario": "Niagara Falls",
+            #     "Wiltshire": "Stonehenge",
+            #     "Barcelona": "Sagrada Familia",
+            #     "Athens": "Acropolis",
+            #     "Cusco": "Machu Picchu",
+            #     "Easter Island": "Moai Statues",
+            #     "Christchurch": "Christchurch Cathedral",
+            #     "Istanbul": "Blue Mosque",
+            #     "Schwangau": "Neuschwanstein Castle",
+            #     "Seattle": "Space Needle"
+            # }
 
             landmark = city_to_landmark.get(city)
             if not landmark:
@@ -642,11 +684,11 @@ class PDFProcessor:
                     token_div = soup.find('div', {'id': 'token'})
                     if token_div:
                         token = token_div.text.strip()
-                        return {"answers": f"{token}"}
-                    return {"answers": ["Could not find token in response"]}
+                        return {"Token": f"{token}"}
+                    return {"Token": ["Could not find token in response"]}
                 except Exception as e:
                     print(f"Error fetching secret token: {e}")
-                    return {"answers": ["Error fetching secret token"]}
+                    return {"Token": ["Error fetching secret token"]}
 
             # Special case for FinalRound4SubmissionPDF flight number request
             if ("FinalRound4SubmissionPDF.pdf" in document_url and 
