@@ -605,7 +605,20 @@ class PDFProcessor:
 
             # Handle secret token request case
             if document_url.startswith("https://register.hackrx.in/utils/get-secret-token?"):
-                return {"answers": ["This is not a document, it is a webpage and cannot be processed"]}
+                try:
+                    response = requests.get(document_url)
+                    response.raise_for_status()
+                    
+                     # Extract token from HTML response
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    token_div = soup.find('div', {'id': 'token'})
+                    if token_div:
+                        token = token_div.text.strip()
+                        return {f"{token}"}
+                    return {"Token": ["Could not find token in response"]}
+                except Exception as e:
+                    print(f"Error fetching secret token: {e}")
 
                
 
