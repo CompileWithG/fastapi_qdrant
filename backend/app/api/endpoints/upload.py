@@ -66,8 +66,10 @@ async def process_document(
     - Requires valid Bearer token in Authorization header
     - Processes the document and questions if authorized
     """
+
+    #bug fix : encoding issue
     try:
-        with open("logs.txt", "a") as f:
+        with open("logs.txt", "a", encoding="utf-8") as f:
             f.write(str(request.documents))
             f.write("\n")
             f.write(str(request.questions)) 
