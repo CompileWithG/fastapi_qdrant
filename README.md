@@ -20,7 +20,7 @@ conda create -n fastapi_qdrant python=3.10 -y
 conda activate fastapi_qdrant
 # OR
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate  # On Windows: .venv\Scripts\Activate.ps1
 ```
 
 ### 3. Install Dependencies
