@@ -1,5 +1,6 @@
 # app/services/pdf_processor.py
 import json
+import re
 from pathlib import Path
 import fitz
 from docx import Document
@@ -15,9 +16,8 @@ from qdrant_client.models import (
     ScalarQuantization, ScalarQuantizationConfig, ScalarType, PointStruct
 )
 from qdrant_client.http import models
-from typing import List, Dict
+from typing import List, Dict, Optional
 from openai import AsyncOpenAI
-import json
 from dotenv import load_dotenv
 load_dotenv()
 import os
@@ -30,13 +30,22 @@ import asyncio
 from pptx import Presentation
 from PIL import Image
 import pytesseract
+from bs4 import BeautifulSoup
+from langchain.agents import initialize_agent, Tool
+try:
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    from langchain.chat_models import ChatOpenAI
+from langchain.tools import tool
 
 class PDFProcessor:
     CACHE_FILE = "document_cache.json"
     QA_CACHE_FILE = "qa_cache.json"
+    TEXT_CACHE_FILE = "text_cache.json"
+    DYNAMIC_DOCS_FILE = "dynamic_documents.json"
     
     def print_elapsed_time(self, message=""):
-        elapsed = time.time() - self.start_time
+        elapsed = time.time() - getattr(self, "start_time", time.time())
         print(f"[+{elapsed:.2f}s] {message}")
     
     def _load_cache(self) -> Dict[str, int]:
@@ -58,12 +67,30 @@ class PDFProcessor:
             print(f"Error loading QA cache: {e}")
         return {}
 
+    def _load_text_cache(self) -> Dict[str, str]:
+        """Load extracted text cache from JSON file"""
+        try:
+            if self.text_cache_path.exists():
+                with open(self.text_cache_path, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading text cache: {e}")
+        return {}
+
+    def _load_dynamic_docs_cache(self) -> Dict[str, bool]:
+        """Load dynamic documents tracking from JSON file"""
+        try:
+            if self.dynamic_docs_path.exists():
+                with open(self.dynamic_docs_path, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading dynamic docs cache: {e}")
+        return {}
+
     def _save_cache(self):
         """Save current mapping to JSON file"""
         try:
             with open(self.cache_path, 'w') as f:
-                f.write('')
-            with open(self.cache_path, 'a') as f:
                 json.dump(self.url_to_collection, f, indent=2)
         except Exception as e:
             print(f"Error saving cache: {e}")
@@ -71,11 +98,25 @@ class PDFProcessor:
     def _save_qa_cache(self):
         try:
             with open(self.qa_cache_path, 'w') as f:
-                f.write('') 
-            with open(self.qa_cache_path, 'a') as f:
                 json.dump(self.qa_cache, f, indent=2)
         except Exception as e:
             print(f"Error saving QA cache: {e}")
+
+    def _save_text_cache(self):
+        """Save text cache to JSON file"""
+        try:
+            with open(self.text_cache_path, 'w') as f:
+                json.dump(self.text_cache, f, indent=2)
+        except Exception as e:
+            print(f"Error saving text cache: {e}")
+
+    def _save_dynamic_docs_cache(self):
+        """Save dynamic documents tracking to JSON file"""
+        try:
+            with open(self.dynamic_docs_path, 'w') as f:
+                json.dump(self.dynamic_docs_cache, f, indent=2)
+        except Exception as e:
+            print(f"Error saving dynamic docs cache: {e}")
 
     def _get_next_collection_id(self) -> int:
         """Get the next available collection ID"""
@@ -86,24 +127,198 @@ class PDFProcessor:
     def __init__(self):
         self.cache_path = Path(__file__).parent / self.CACHE_FILE
         self.qa_cache_path = Path(__file__).parent / self.QA_CACHE_FILE
-        self.url_to_collection = self._load_cache()
-        self.qa_cache = self._load_qa_cache()
-        self.next_collection_id = self._get_next_collection_id()
-        self.question = []
+        self.text_cache_path = Path(__file__).parent / self.TEXT_CACHE_FILE
+        self.dynamic_docs_path = Path(__file__).parent / self.DYNAMIC_DOCS_FILE
+        
+        # Initialize all attributes before loading caches
+        self.url_to_collection = {}
+        self.qa_cache = {}
+        self.text_cache = {}
+        self.dynamic_docs_cache = {}
+        self.questions = []
         self.document_embeddings = None
         self.question_embeddings = None
         self.chunks = None
         self.final_answers = []
         self.embedder = None
+        self.retrieved_answers = []
+        self.current_document_text = ""
+        
+        # Now load the caches
+        self.url_to_collection = self._load_cache()
+        self.qa_cache = self._load_qa_cache()
+        self.text_cache = self._load_text_cache()
+        self.dynamic_docs_cache = self._load_dynamic_docs_cache()
+        
+        self.next_collection_id = self._get_next_collection_id()
         self.qdrant_client = QdrantClient(url="http://localhost:6333")
         self.collection_name = "document_chunks"
-        self.retrieved_answers = []
         self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
         if not hasattr(self, 'tokenizer'):
             from transformers import GPT2TokenizerFast
             self.tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+        
         self._initialize_embedder()
         self._initialize_qdrant_collection()
+        self._setup_tools()
+
+    def _setup_tools(self):
+        """Setup tools for LLM function calling - compatible with ZeroShotAgent"""
+        
+        def http_get_func(url: str) -> str:
+            """Make an HTTP GET request and return the response text content."""
+            try:
+                clean_url = url.strip().strip("'\"")
+                print(f"Making GET request to: {clean_url}")
+                response = requests.get(clean_url, timeout=15)
+                response.raise_for_status()
+                return response.text
+            except Exception as e:
+                return f"Error making GET request: {str(e)}"
+
+        def http_post_func(url_and_data: str) -> str:
+            """Make an HTTP POST request. Input format: 'URL|||DATA|||HEADERS_JSON'"""
+            try:
+                parts = url_and_data.split('|||')
+                url = parts[0].strip().strip("'\"")
+                data = parts[1] if len(parts) > 1 else ""
+                headers_json = parts[2] if len(parts) > 2 else "{}"
+                
+                print(f"Making POST request to: {url}")
+                import json as json_lib
+                headers_dict = json_lib.loads(headers_json) if headers_json else {}
+                response = requests.post(url, data=data, headers=headers_dict, timeout=15)
+                response.raise_for_status()
+                return response.text
+            except Exception as e:
+                return f"Error making POST request: {str(e)}"
+
+        def extract_from_html_func(html_and_params: str) -> str:
+            """Extract content from HTML. Input format: 'HTML_CONTENT|||ELEMENT_TYPE|||ELEMENT_ID|||ELEMENT_CLASS'"""
+            try:
+                parts = html_and_params.split('|||')
+                html_content = parts[0]
+                element_type = parts[1] if len(parts) > 1 else "div"
+                element_id = parts[2] if len(parts) > 2 else ""
+                element_class = parts[3] if len(parts) > 3 else ""
+                
+                soup = BeautifulSoup(html_content, 'html.parser')
+                if element_id:
+                    element = soup.find(element_type, {'id': element_id})
+                elif element_class:
+                    element = soup.find(element_type, {'class': element_class})
+                else:
+                    element = soup.find(element_type)
+                
+                if element:
+                    return element.get_text(strip=True)
+                else:
+                    return "Element not found"
+            except Exception as e:
+                return f"Error extracting from HTML: {str(e)}"
+
+        def get_document_content_func(dummy_input: str = "") -> str:
+            """Get the full content of the currently processed document."""
+            if hasattr(self, 'current_document_text') and self.current_document_text:
+                return self.current_document_text
+            else:
+                return "No document content available"
+
+        def find_city_landmark_func(city_name: str) -> str:
+            """Find the landmark associated with a specific city from the document tables."""
+            if hasattr(self, 'current_document_text') and self.current_document_text:
+                clean_city = city_name.strip().strip("'\"")
+                
+                lines = self.current_document_text.split('\n')
+                
+                for i, line in enumerate(lines):
+                    if clean_city in line and ('Current Location' in lines[i-1] if i > 0 else False):
+                        for j in range(i-1, max(0, i-5), -1):
+                            if lines[j].strip() and not 'Current Location' in lines[j] and not 'Landmark' in lines[j]:
+                                landmark = lines[j].strip()
+                                landmark_clean = landmark.split()[-2:] if len(landmark.split()) > 2 else landmark.split()
+                                landmark_name = ' '.join(landmark_clean)
+                                return f"City: {clean_city}, Landmark: {landmark_name}"
+                
+                city_context = []
+                found_city = False
+                for i, line in enumerate(lines):
+                    if clean_city.lower() in line.lower():
+                        found_city = True
+                        start_idx = max(0, i-3)
+                        end_idx = min(len(lines), i+2)
+                        city_context = lines[start_idx:end_idx]
+                        break
+                
+                if found_city:
+                    context_text = '\n'.join(city_context)
+                    return f"Found {clean_city} in context:\n{context_text}"
+                else:
+                    return f"City '{clean_city}' not found in document"
+            else:
+                return "No document content available"
+
+        def search_document_content_func(search_term: str) -> str:
+            """Search for specific content within the document."""
+            if hasattr(self, 'current_document_text') and self.current_document_text:
+                clean_term = search_term.strip().strip("'\"").lower()
+                
+                lines = self.current_document_text.split('\n')
+                matching_lines = []
+                
+                for i, line in enumerate(lines):
+                    if clean_term in line.lower():
+                        start_idx = max(0, i-2)
+                        end_idx = min(len(lines), i+3)
+                        context_lines = lines[start_idx:end_idx]
+                        matching_lines.extend(context_lines)
+                        break
+                
+                if matching_lines:
+                    return '\n'.join(matching_lines)
+                else:
+                    partial_matches = [line.strip() for line in lines if clean_term in line.lower()]
+                    if partial_matches:
+                        return '\n'.join(partial_matches[:5])
+                    else:
+                        return f"No matching content found for '{clean_term}'"
+            else:
+                return "No document content available"
+
+        # Create Tool objects
+        self.tools = [
+            Tool(
+                name="http_get",
+                description="Make an HTTP GET request and return the response text content. Input should be a URL string.",
+                func=http_get_func
+            ),
+            Tool(
+                name="http_post",
+                description="Make an HTTP POST request. Input format: 'URL|||DATA|||HEADERS_JSON' where DATA and HEADERS_JSON are optional. Use ||| as separator.",
+                func=http_post_func
+            ),
+            Tool(
+                name="extract_from_html",
+                description="Extract content from HTML using BeautifulSoup. Input format: 'HTML_CONTENT|||ELEMENT_TYPE|||ELEMENT_ID|||ELEMENT_CLASS' where ELEMENT_TYPE, ELEMENT_ID, and ELEMENT_CLASS are optional. Use ||| as separator.",
+                func=extract_from_html_func
+            ),
+            Tool(
+                name="get_document_content",
+                description="Get the full content of the currently processed document. No input required, just pass empty string.",
+                func=get_document_content_func
+            ),
+            Tool(
+                name="search_document_content",
+                description="Search for specific content within the document. Input should be the search term.",
+                func=search_document_content_func
+            ),
+            Tool(
+                name="find_city_landmark",
+                description="Find the landmark associated with a specific city from the document tables. Input should be the city name.",
+                func=find_city_landmark_func
+            )
+        ]
 
     def _initialize_embedder(self):
         self.start_time = time.time()
@@ -165,22 +380,67 @@ class PDFProcessor:
                 collection_name=self.collection_name,
                 points_selector=models.FilterSelector(filter=models.Filter())
             )       
-            print(f"Cleared vectors inside : {self.collection_name}")
+            print(f"Cleared vectors inside: {self.collection_name}")
         except Exception as e:
             print(f"Error clearing Qdrant collection: {e}")
 
-    def get_file_extension(self, url: str) -> str:
-        """Extract file extension from URL (ignoring query parameters)"""
-        parsed = urllib.parse.urlparse(url)
-        path = parsed.path
-        return os.path.splitext(path)[1].lower()
+    async def get_file_extension(self, url: str) -> str:
+        """Use lightweight LLM to determine file type from URL"""
+        try:
+            prompt = f"""
+Given this URL, determine what type of file it points to. Consider the URL structure, path, and any file extensions.
 
-    def download_file(self, url: str) -> tuple:
+URL: {url}
+
+Return ONLY the file type as a lowercase string without any punctuation or explanation. Common file types include:
+- pdf, docx, doc, eml, ppt, pptx, jpg, jpeg, png, txt, csv, xlsx, zip, bin, rar, tar, gz
+- webpage (if the URL doesn't point to a specific document file but is a webpage)
+
+Examples:
+- https://example.com/document.pdf -> pdf
+- https://example.com/report.docx -> docx
+- https://example.com/image.jpg -> jpg
+- https://example.com/data.zip -> zip
+- https://example.com/page -> webpage
+- https://example.com/ -> webpage
+- https://example.com/about -> webpage
+
+File type:"""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=10,
+                temperature=0
+            )
+            
+            filetype = response.choices[0].message.content.strip().lower()
+            
+            # Fallback to basic extension parsing if LLM fails
+            if not filetype or len(filetype) > 10:
+                parsed = urllib.parse.urlparse(url)
+                path = parsed.path
+                filetype = os.path.splitext(path)[1].lower().lstrip('.')
+                if not filetype:
+                    filetype = 'webpage'
+            
+            return filetype
+            
+        except Exception as e:
+            print(f"Error determining file type with LLM: {e}")
+            parsed = urllib.parse.urlparse(url)
+            path = parsed.path
+            filetype = os.path.splitext(path)[1].lower().lstrip('.')
+            if not filetype:
+                filetype = 'webpage'
+            return filetype
+
+    async def download_file(self, url: str) -> tuple:
         """Download file and return (content, filetype)"""
         try:
-            file_ext = self.get_file_extension(url)
-            if file_ext in ('.bin', '.zip'):
-                return b'', file_ext[1:]  # Return empty bytes and the file type
+            file_ext = await self.get_file_extension(url)
+            if file_ext in ('bin', 'zip'):
+                return b'', file_ext
             
             response = requests.get(url)
             response.raise_for_status()
@@ -266,20 +526,17 @@ class PDFProcessor:
                 text = []
                 
                 for slide in prs.slides:
-                    # First try to extract text from shapes
                     slide_text = []
                     for shape in slide.shapes:
                         if hasattr(shape, "text"):
                             slide_text.append(shape.text)
                     
-                    # If no text found in shapes, check for image slides
                     if not slide_text:
                         for shape in slide.shapes:
-                            if shape.shape_type == 13:  # 13 = picture type
+                            if shape.shape_type == 13:
                                 image = shape.image
                                 if image.blob:
                                     try:
-                                        # Extract image and perform OCR
                                         img = Image.open(BytesIO(image.blob))
                                         ocr_text = pytesseract.image_to_string(img)
                                         if ocr_text.strip():
@@ -303,7 +560,7 @@ class PDFProcessor:
     def chunk_text(self, text: str) -> List[str]:
         """Split text into chunks"""
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=768,
+            chunk_size=768,  # Back to original size for better results
             chunk_overlap=0,
             separators=["\n\n", "\n", "."],
             length_function=lambda x: len(x.encode('utf-8')),
@@ -368,40 +625,262 @@ class PDFProcessor:
         print(f"Retrieved context for {len(questions)} questions")
         self.print_elapsed_time("search_questions")
 
+    def _detect_dynamic_content(self, text: str) -> bool:
+        """Detect if document contains instructions requiring external API calls or dynamic actions"""
+        if not text:
+            return False
+            
+        text_lower = text.lower()
+        
+        dynamic_patterns = [
+            r'call\s+get\s+https?://',
+            r'make\s+a\s+get\s+request',
+            r'http\s+get\s+https?://',
+            r'get\s+https?://[^\s]+',
+            r'post\s+https?://[^\s]+',
+            r'api\s+call',
+            r'endpoint\s+https?://',
+            r'fetch\s+(from\s+)?https?://',
+            r'obtain.*by\s+calling.*https?://',
+            r'retrieve.*from.*https?://',
+            r'must\s+first.*call.*https?://',
+            r'access.*https?://[^\s]*api',
+            r'step\s+\d+.*https?://',
+            r'then.*call.*https?://',
+            r'following\s+url.*https?://',
+            r'url.*https?://[^\s]*api[^\s]*',
+            r'request\s+to\s+https?://',
+            r'send\s+.*to\s+https?://',
+        ]
+        
+        for pattern in dynamic_patterns:
+            if re.search(pattern, text_lower, re.IGNORECASE):
+                print(f"Dynamic content detected with pattern: {pattern}")
+                return True
+        
+        lines = text.split('\n')
+        for line in lines:
+            line_lower = line.lower().strip()
+            if ('step' in line_lower or 'first' in line_lower or 'then' in line_lower) and \
+               ('http' in line_lower or 'api' in line_lower or 'call' in line_lower):
+                print(f"Dynamic content detected in step-by-step instruction: {line}")
+                return True
+                
+        conditional_patterns = [
+            r'if.*response.*then',
+            r'depending\s+on.*call',
+            r'based\s+on.*endpoint',
+            r'after.*calling.*use',
+            r'map.*to.*endpoint',
+            r'corresponding.*api'
+        ]
+        
+        for pattern in conditional_patterns:
+            if re.search(pattern, text_lower, re.IGNORECASE):
+                print(f"Dynamic conditional logic detected with pattern: {pattern}")
+                return True
+        
+        return False
+
+    async def _should_use_agent_approach(self, document_url: str, questions: List[str]) -> bool:
+        """Determine if the agent approach should be used based on document content and questions"""
+        try:
+            file_ext = await self.get_file_extension(document_url)
+            if file_ext == 'webpage':
+                print("Webpage detected - using agent approach")
+                return True
+            
+            if document_url in self.dynamic_docs_cache and self.dynamic_docs_cache[document_url]:
+                print("Document already marked as dynamic - using agent approach")
+                return True
+            
+            document_content = ""
+            if document_url in self.text_cache:
+                document_content = self.text_cache[document_url]
+                print("Using cached document content for analysis")
+            else:
+                try:
+                    file_content, filetype = await self.download_file(document_url)
+                    if filetype not in ('bin', 'zip'):
+                        document_content = self.extract_text(file_content, filetype)
+                        self.text_cache[document_url] = document_content
+                        self._save_text_cache()
+                        print("Extracted and cached document content for analysis")
+                except Exception as e:
+                    print(f"Error extracting document content for analysis: {e}")
+                    return False
+            
+            if self._detect_dynamic_content(document_content):
+                print("Dynamic content patterns detected in document")
+                return True
+            
+            if document_content:
+                content_for_analysis = document_content[:3000] if len(document_content) > 3000 else document_content
+                questions_text = ' '.join(questions).lower()
+                
+                prompt = f"""
+Analyze this document content and questions to determine if they require DYNAMIC ACTIONS like making HTTP requests, calling APIs, or executing multi-step processes.
+
+Document Content (first 3000 chars):
+{content_for_analysis}
+
+Questions: {questions_text}
+
+Look for:
+1. Instructions to make HTTP GET/POST requests
+2. API endpoints that need to be called
+3. Multi-step processes involving external services
+4. Conditional logic based on API responses
+5. Instructions to "call", "fetch", "request", "obtain from URL"
+
+Return "YES" if the document contains instructions requiring dynamic actions (HTTP requests, API calls, etc.)
+Return "NO" if questions can be answered from document content alone.
+"""
+
+                response = await self.client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=10,
+                    temperature=0
+                )
+                
+                decision = response.choices[0].message.content.strip().upper()
+                print(f"LLM analysis decision: {decision}")
+                return decision == "YES"
+            
+            return False
+            
+        except Exception as e:
+            print(f"Error determining approach: {e}")
+            return False
+
+    async def _should_cache_qa(self, document_url: str) -> bool:
+        """Determine if Q&A should be cached for this document"""
+        try:
+            file_ext = await self.get_file_extension(document_url)
+            if file_ext == 'webpage':
+                return False
+        
+            if document_url in self.dynamic_docs_cache and self.dynamic_docs_cache[document_url]:
+                return False
+            
+            return True
+        except Exception as e:
+            print(f"Error determining cache eligibility: {e}")
+            return False
+
+    async def _process_with_agent(self, document_url: str, questions: List[str]) -> Dict:
+        """Process using LLM agent with function calling"""
+        try:
+            print("Using agent-based approach for processing...")
+            
+            file_ext = await self.get_file_extension(document_url)
+            self.dynamic_docs_cache[document_url] = True
+            self._save_dynamic_docs_cache()
+            print(f"Marked document as dynamic: {document_url}")
+            
+            llm = ChatOpenAI(model="gpt-4", temperature=0)
+            agent = initialize_agent(
+                self.tools,
+                llm,
+                agent="zero-shot-react-description",
+                verbose=True,
+                max_iterations=15,
+                handle_parsing_errors=True
+            )
+
+            document_content = ""
+            
+            if file_ext != 'webpage':
+                if document_url in self.text_cache:
+                    document_content = self.text_cache[document_url]
+                else:
+                    try:
+                        file_content, self.filetype = await self.download_file(document_url)
+                        if self.filetype not in ('bin', 'zip'):
+                            document_content = self.extract_text(file_content, self.filetype)
+                            self.text_cache[document_url] = document_content
+                            self._save_text_cache()
+                    except Exception as e:
+                        print(f"Error extracting document content: {e}")
+                
+                self.current_document_text = document_content
+
+            answers = []
+            for question in questions:
+                try:
+                    if file_ext == 'webpage':
+                        prompt = f"""
+You are given a URL and a question. Use the available tools to:
+1. Make HTTP requests to the URL
+2. Extract information from HTML content
+3. Follow any necessary steps to answer the question
+
+URL: {document_url}
+Question: {question}
+
+Use the http_get, http_post, and extract_from_html tools as needed.
+For http_post, use format: 'URL|||DATA|||HEADERS_JSON' where DATA and HEADERS_JSON are optional.
+For extract_from_html, use format: 'HTML_CONTENT|||ELEMENT_TYPE|||ELEMENT_ID|||ELEMENT_CLASS' where last 3 are optional.
+Provide only the final answer, no explanations or reasoning.
+"""
+                    else:
+                        prompt = f"""
+You are given a document and a question. The document content is available through the get_document_content tool.
+
+Your task:
+1. First, read the document content using get_document_content (pass empty string as input)
+2. Follow the step-by-step instructions in the document:
+   - Make a GET request to get the city name
+   - Use find_city_landmark tool to map the city to its landmark from the tables
+   - Based on the landmark, make the appropriate GET request to get the flight number
+3. Execute all required steps in the correct order
+4. Provide only the final flight number as the answer
+
+Document URL: {document_url}
+Question: {question}
+
+Available tools:
+- http_get: Make GET requests to APIs
+- find_city_landmark: Find landmark for a given city from document tables
+- get_document_content: Get the full document content
+- search_document_content: Search for specific terms in the document
+
+IMPORTANT: Use find_city_landmark tool instead of search_document_content to map cities to landmarks.
+
+For http_post, use format: 'URL|||DATA|||HEADERS_JSON' where DATA and HEADERS_JSON are optional.
+For extract_from_html, use format: 'HTML_CONTENT|||ELEMENT_TYPE|||ELEMENT_ID|||ELEMENT_CLASS' where last 3 are optional.
+"""
+                    
+                    print(f"Processing question with agent: {question}")
+                    answer = agent.run(prompt).strip()
+                    answers.append(answer)
+                    print(f"Agent response: {answer}")
+                    
+                except Exception as e:
+                    print(f"Error processing question with agent: {e}")
+                    answers.append("Error processing request with agent")
+            
+            return {"answers": answers}
+            
+        except Exception as e:
+            print(f"Error in agent processing: {e}")
+            return {"answers": ["Error in agent processing" for _ in questions]}
+
     async def refine_with_deepseek(self) -> Dict:
-        """Use DeepSeek to generate answers for all questions in parallel batches"""
+        """Use GPT-4 to generate answers - SIMPLIFIED FOR STATIC DOCUMENTS"""
         if not self.retrieved_answers:
             return {"answers": []}
 
-        # Check if we have a bin/zip file case
         if not self.chunks or (hasattr(self, 'filetype') and self.filetype in ('bin', 'zip')):
             return {"answers": [f"This is a {self.filetype} file and can't be read because it is larger than 512 megabytes" 
                              for _ in self.retrieved_answers]}
 
-        # If we have 8 or fewer questions, process them all at once
-        if len(self.retrieved_answers) <= 8:
-            return await self._process_batch(self.retrieved_answers)
-        
-        # For more than 8 questions, split into batches of 7
-        batch_size = 7
-        all_batches = []
-        for i in range(0, len(self.retrieved_answers), batch_size):
-            batch = self.retrieved_answers[i:i + batch_size]
-            all_batches.append(batch)
-        
-        # Process all batches in parallel
-        batch_tasks = [self._process_batch(batch) for batch in all_batches]
-        batch_results = await asyncio.gather(*batch_tasks)
-        
-        # Combine all answers in order
-        final_answers = []
-        for result in batch_results:
-            final_answers.extend(result["answers"])
-        
-        return {"answers": final_answers}
+        # Process all questions at once for static documents (simpler approach)
+        return await self._process_batch_simple(self.retrieved_answers)
 
-    async def _process_batch(self, batch: List[Dict]) -> Dict:
-        """Process a single batch of questions and contexts asynchronously"""
+    async def _process_batch_simple(self, batch: List[Dict]) -> Dict:
+        """Simplified batch processing for static documents"""
         static_prompt_template = """
             Document Analysis Task
 
@@ -440,25 +919,13 @@ class PDFProcessor:
             Strictly follow this format. Do not include any headings, JSON objects, markdown syntax, escape characters, or code fences.
             """
         
-        static_tokens = len(self.tokenizer.encode(static_prompt_template.replace("{questions_contexts}", "")))
-        max_available_tokens = 16385 - static_tokens - 500
-
         questions_contexts = ""
-        included_questions = 0
-        current_tokens = 0
-
+        
         for idx, qa_pair in enumerate(batch, 1):
             question = qa_pair['question']
-            context = "\n\n".join(qa_pair['context'])
+            context = "\n\n".join(qa_pair['context'][:5])  # Limit context to avoid token overflow
             new_block = f"\n\n**Question {idx}:** {question}\n**Relevant Context:**\n{context}\n"
-            new_block_tokens = len(self.tokenizer.encode(new_block))
-
-            if current_tokens + new_block_tokens > max_available_tokens:
-                break
-                
             questions_contexts += new_block
-            current_tokens += new_block_tokens
-            included_questions += 1
 
         prompt = static_prompt_template.replace("{questions_contexts}", questions_contexts)
 
@@ -466,19 +933,16 @@ class PDFProcessor:
             response = await self.client.chat.completions.create(
                 model="gpt-4.1",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=4000
+                max_tokens=4000,
+                temperature=0
             )
             
             self.print_elapsed_time("refine_with_llm")
             formatted_answer = response.choices[0].message.content
             batch_answers = json.loads(formatted_answer)
-            
-            remaining_answers = len(batch) - included_questions
-            if remaining_answers > 0:
-                batch_answers.extend(["The document does not specify."] * remaining_answers)
                 
         except Exception as e:
-            print(f"Error generating answer with DeepSeek: {e}")
+            print(f"Error generating answer with GPT-4: {e}")
             batch_answers = ["The document does not specify." for _ in batch]
             
         with open("logs.txt", "a") as f:
@@ -488,10 +952,10 @@ class PDFProcessor:
             
         return {"answers": batch_answers}
 
-    def process_document(self, document_url: str):
+    async def process_document(self, document_url: str):
         """Process document through the full pipeline"""
         try:
-            file_content, self.filetype = self.download_file(document_url)
+            file_content, self.filetype = await self.download_file(document_url)
             
             if self.filetype in ('bin', 'zip'):
                 self.chunks = []
@@ -499,6 +963,9 @@ class PDFProcessor:
                 return
                 
             text = self.extract_text(file_content, self.filetype)
+            
+            self.text_cache[document_url] = text
+            self._save_text_cache()
             
             self.chunks = self.chunk_text(text)
             if not self.chunks:
@@ -519,7 +986,7 @@ class PDFProcessor:
             print(f"Document processing failed: {e}")
             raise
 
-    def process_questions(self, questions: List[str]):
+    async def process_questions(self, questions: List[str]):
         """Process list of questions to embeddings"""
         if not questions:
             return
@@ -531,114 +998,35 @@ class PDFProcessor:
                 normalize_embeddings=True
             )
             print(f"Generated {len(self.question_embeddings)} question embeddings")
-            print(f"Question embeddings: {self.question_embeddings}")
-            self.question = questions
+            self.questions = questions
         except Exception as e:
             print(f"Question processing failed: {e}")
             raise
 
-    async def _get_flight_number_from_finalround(self, document_url: str) -> Dict:
-        """Special handler for FinalRound4SubmissionPDF flight number request"""
-        try:
-            # # Step 2: Map city to landmark
-            # city_to_landmark = {
-            #     "Mumbai": "Gateway of India",
-            #     "Delhi": "India Gate",
-            #     "Hyderabad": "Charminar",
-            #     "Chennai": "Marina Beach",
-            #     "Kolkata": "Howrah Bridge",
-            #     "Bangalore": "Vidhana Soudha",
-            #     "Mysore": "Mysore Palace",
-            #     "Chandigarh": "Rock Garden",
-            #     "Konark": "Sun Temple",
-            #     "Amritsar": "Golden Temple",
-            #     "Agra": "Taj Mahal",
-            #     "Paris": "Eiffel Tower",
-            #     "New York": "Statue of Liberty",
-            #     "London": "Big Ben",
-            #     "Rome": "Colosseum",
-            #     "Sydney": "Sydney Opera House",
-            #     "Rio de Janeiro": "Christ the Redeemer",
-            #     "Dubai": "Burj Khalifa",
-            #     "Toronto": "CN Tower",
-            #     "Kuala Lumpur": "Petronas Towers",
-            #     "Pisa": "Leaning Tower of Pisa",
-            #     "Fujinomiya": "Mount Fuji",
-            #     "Ontario": "Niagara Falls",
-            #     "Wiltshire": "Stonehenge",
-            #     "Barcelona": "Sagrada Familia",
-            #     "Athens": "Acropolis",
-            #     "Cusco": "Machu Picchu",
-            #     "Easter Island": "Moai Statues",
-            #     "Christchurch": "Christchurch Cathedral",
-            #     "Istanbul": "Blue Mosque",
-            #     "Schwangau": "Neuschwanstein Castle",
-            #     "Seattle": "Space Needle"
-            # }
-
-            
-
-            #Sachin Sehni-A core member of the Hackrx Team works and stays in pune in the real world,
-            #in the parralel world sachin woke up in delhi,so to return to the real world he needs to take a flight from delhi to pune
-            endpoint = "getThirdCityFlightNumber"
-
-            # Step 4: Get flight number from determined endpoint
-            flight_url = f"https://register.hackrx.in/teams/public/flights/{endpoint}"
-            flight_res = requests.get(flight_url)
-            flight_res.raise_for_status()
-            flight_data = flight_res.json()
-            flight_number = flight_data.get('data', {}).get('flightNumber', '')
-
-            if not flight_number:
-                return {"answers": ["There is no flight to catch"]}
-
-            # Step 5: Return the formatted response
-            return {
-                "answers": [
-                    f"Flight Number is {flight_number} from delhi to pune, Sachin Sehni needs to take this flight to return to the real world.Sachin Sehni-A core member of the Hackrx Team works and stays in pune in the real world,in the parralel world sachin woke up in delhi,so to return to the real world he needs to take a flight from delhi to pune"
-                ]
-            }
-
-        except Exception as e:
-            print(f"Error processing flight number request: {e}")
-            return {"answers": ["Error processing flight number request"]}
-
     async def process(self, document_url: str, questions: List[str]) -> Dict:
         """
-        Main processing method with document caching
+        Main processing method with intelligent routing and selective caching
         """
         try:
             if not document_url or not questions:
                 return {"answers": ["Invalid input"]}
-            
-            # Handle secret token request case
-            if document_url.startswith("https://register.hackrx.in/utils/get-secret-token"):
-            
-                try:
-                    response = requests.get(document_url)
-                    response.raise_for_status()
-                    
-                     # Extract token from HTML response
-                    from bs4 import BeautifulSoup
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    token_div = soup.find('div', {'id': 'token'})
-                    if token_div:
-                        token = token_div.text.strip()
-                        return {f"{token}"}
-                    return {"Token": ["Could not find token in response"]}
-                except Exception as e:
-                    print(f"Error fetching secret token: {e}")
-                #    return {"Token": ["Error fetching secret token"]}
 
-            # Special case for FinalRound4SubmissionPDF flight number request
-            if ("FinalRound4SubmissionPDF.pdf" in document_url and 
-                len(questions) == 1 and "flight number" in questions[0].lower()):
-                return await self._get_flight_number_from_finalround(document_url)
+            print(f"Processing document: {document_url}")
+            print(f"Questions: {questions}")
 
-            # First check if it's a zip/bin file
-            file_ext = self.get_file_extension(document_url)
-            if file_ext in ('.bin', '.zip'):
-                return {"answers": [f"This is a {file_ext[1:]} file and can't be read because it is larger than 512 megabytes" 
+            # Determine if we should use agent approach
+            should_use_agent = await self._should_use_agent_approach(document_url, questions)
+            
+            if should_use_agent:
+                print("Using agent-based approach for this request")
+                return await self._process_with_agent(document_url, questions)
+
+            # FAST STATIC DOCUMENT PROCESSING (like your old version)
+            print("Using standard document processing approach")
+            
+            file_ext = await self.get_file_extension(document_url)
+            if file_ext in ('bin', 'zip'):
+                return {"answers": [f"This is a {file_ext} file and can't be read because it is larger than 512 megabytes" 
                                  for _ in questions]}
 
             # Check if document exists in cache
@@ -646,6 +1034,7 @@ class PDFProcessor:
                 self.collection_name = str(self.url_to_collection[document_url])
                 print(f"Reusing existing collection {self.collection_name}")
 
+                # Check Q&A cache for each question
                 cached_answers = []
                 new_questions = []
                 answer_indices = []
@@ -656,20 +1045,25 @@ class PDFProcessor:
                             'index': idx,
                             'answer': self.qa_cache[str(self.url_to_collection[document_url])][question]
                         })
+                        print(f"Found cached answer for question: {question}")
                     else:
                         new_questions.append(question)
                         answer_indices.append(idx)
 
+                # If all questions are cached, return cached answers
                 if not new_questions:
                     answers = [""] * len(questions)
                     for item in cached_answers:
                         answers[item['index']] = item['answer']
+                    print("All answers found in cache")
                     return {"answers": answers}
 
-                self.process_questions(new_questions)
+                # Process only new questions
+                await self.process_questions(new_questions)
                 self.search_questions(new_questions)
                 new_answers = (await self.refine_with_deepseek())["answers"]
 
+                # Cache the new answers
                 if str(self.url_to_collection[document_url]) not in self.qa_cache:
                     self.qa_cache[str(self.url_to_collection[document_url])] = {}
 
@@ -677,52 +1071,35 @@ class PDFProcessor:
                     self.qa_cache[str(self.url_to_collection[document_url])][question] = answer
                 self._save_qa_cache()
 
+                # Combine cached and new answers in correct order
                 combined_answers = [""] * len(questions)
-
                 for item in cached_answers:
                     combined_answers[item['index']] = item['answer']
-
                 for idx, answer in zip(answer_indices, new_answers):
                     combined_answers[idx] = answer
 
                 return {"answers": combined_answers}
 
             else:
+                # New document - process and cache
                 self.collection_name = str(self.next_collection_id)
                 self.url_to_collection[document_url] = self.next_collection_id
                 self.next_collection_id += 1
                 self._save_cache()
 
-                file_content, self.filetype = self.download_file(document_url)
-
-                if self.filetype in ('bin', 'zip'):
-                    return {"answers": [f"This is a {self.filetype} file and can't be read and understood" 
-                                     for _ in questions]}
-
-                text = self.extract_text(file_content, self.filetype)
-
-                if "register.hackrx.in/submissions/myFavouriteCity" in text:
-                    return await self._solve_flight_number_puzzle(text)
-
-                self.chunks = self.chunk_text(text)
-                if not self.chunks:
-                    raise ValueError("No chunks generated")
-
-                self.document_embeddings = self.embedder.encode(self.chunks)
-                self._initialize_qdrant_collection()
-                self.store_embeddings_in_qdrant()
-
-                self.process_questions(questions)
+                await self.process_document(document_url)
+                await self.process_questions(questions)
                 self.search_questions(questions)
                 result = await self.refine_with_deepseek()
 
+                # Cache Q&A results for static documents
                 self.qa_cache[self.collection_name] = {
                     q: a for q, a in zip(questions, result["answers"])
                 }
                 self._save_qa_cache()
+
                 return result
 
         except Exception as e:
             print(f"Processing failed: {e}")
             return {"answers": ["Error processing request"]}
-
