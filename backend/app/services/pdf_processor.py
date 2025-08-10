@@ -6,7 +6,6 @@ import fitz
 from docx import Document
 from io import BytesIO
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-import numpy as np
 from sentence_transformers import SentenceTransformer
 import requests
 from qdrant_client import QdrantClient
@@ -1102,4 +1101,5 @@ For extract_from_html, use format: 'HTML_CONTENT|||ELEMENT_TYPE|||ELEMENT_ID|||E
 
         except Exception as e:
             print(f"Processing failed: {e}")
+
             return {"answers": ["Error processing request"]}
