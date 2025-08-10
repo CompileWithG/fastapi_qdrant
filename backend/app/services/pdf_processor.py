@@ -32,6 +32,12 @@ from pptx import Presentation
 from PIL import Image
 import pytesseract
 
+#encodin fix
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 class PDFProcessor:
     CACHE_FILE = "document_cache.json"
     QA_CACHE_FILE = "qa_cache.json"
@@ -44,7 +50,7 @@ class PDFProcessor:
         """Load URL to collection mapping from JSON file"""
         try:
             if self.cache_path.exists():
-                with open(self.cache_path, 'r') as f:
+                with open(self.cache_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
         except Exception as e:
             print(f"Error loading cache: {e}")
@@ -53,7 +59,7 @@ class PDFProcessor:
     def _load_qa_cache(self) -> Dict[str, Dict[str, str]]:
         try:
             if self.qa_cache_path.exists():
-                with open(self.qa_cache_path, 'r') as f:
+                with open(self.qa_cache_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
         except Exception as e:
             print(f"Error loading QA cache: {e}")
@@ -62,19 +68,19 @@ class PDFProcessor:
     def _save_cache(self):
         """Save current mapping to JSON file"""
         try:
-            with open(self.cache_path, 'w') as f:
+            with open(self.cache_path, 'w', encoding='utf-8') as f:
                 f.write('')
-            with open(self.cache_path, 'a') as f:
-                json.dump(self.url_to_collection, f, indent=2)
+            with open(self.cache_path, 'a', encoding='utf-8') as f:
+                json.dump(self.url_to_collection, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"Error saving cache: {e}")
     
     def _save_qa_cache(self):
         try:
-            with open(self.qa_cache_path, 'w') as f:
+            with open(self.qa_cache_path, 'w', encoding='utf-8') as f:
                 f.write('') 
-            with open(self.qa_cache_path, 'a') as f:
-                json.dump(self.qa_cache, f, indent=2)
+            with open(self.qa_cache_path, 'a', encoding='utf-8') as f:
+                json.dump(self.qa_cache, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"Error saving QA cache: {e}")
 
@@ -482,7 +488,7 @@ class PDFProcessor:
             print(f"Error generating answer with DeepSeek: {e}")
             batch_answers = ["The document does not specify." for _ in batch]
             
-        with open("logs.txt", "a") as f:
+        with open("logs.txt", "a", encoding='utf-8') as f:
             f.write("\n")
             f.write(str(batch_answers)) 
             f.write("\n")
@@ -493,7 +499,6 @@ class PDFProcessor:
         """Process document through the full pipeline"""
         try:
             file_content, self.filetype = self.download_file(document_url)
-            
             if self.filetype in ('bin', 'zip'):
                 self.chunks = []
                 self.document_embeddings = None
