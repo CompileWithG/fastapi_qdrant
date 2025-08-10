@@ -1,5 +1,6 @@
 # app/services/pdf_processor.py
 import json
+import aiohttp
 from pathlib import Path
 import fitz
 from docx import Document
@@ -537,132 +538,52 @@ class PDFProcessor:
             print(f"Question processing failed: {e}")
             raise
 
-    async def _get_flight_number_from_finalround(self, document_url: str) -> Dict:
-        """Special handler for FinalRound4SubmissionPDF flight number request"""
-        try:
-            # Step 1: Get favorite city from API
-            city_res = requests.get("https://register.hackrx.in/submissions/myFavouriteCity")
-            city_res.raise_for_status()
-            city_data = city_res.json()
-            city = city_data.get('data', {}).get('city', '')
+    async def run_doc_with_endpoints(self, mission_brief, question):
+        system_prompt = """You are an API-calling assistant for docs that contain mission briefs and API endpoints.
+                            You will be given:
+                            1. A mission brief with rules and API endpoints.
+                            2. API responses from previous calls.
 
-            if not city:
-                return {"answers": ["Failed to retrieve favorite city from API"]}
+                            Your job:
+                            - Read the mission brief and figure out the next API call or give the final answer.
+                            - Always return JSON ONLY in one of these two formats:
+                            {"action": "call_endpoint", "endpoint": "<url>"}
+                            or
+                            {"action": "final_answer", "answer": "<result>"}
+                            No extra text, no explanations, no comments."""
 
-            
-            city_to_landmark = {
-                "Delhi": "Gateway of India",
-                "Mumbai": "India Gate",
-                "Chennai": "Charminar",
-                "Hyderabad": "Marina Beach",
-                "Ahmedabad": "Howrah Bridge",
-                "Mysuru": "Golconda Fort",
-                "Kochi": "Qutub Minar",
-                "Pune": "Meenakshi Temple",
-                "Nagpur": "Lotus Temple",
-                "Chandigarh": "Mysore Palace",
-                "Kerala": "Rock Garden",
-                "Bhopal": "Victoria Memorial",
-                "Varanasi": "Vidhana Soudha",
-                "Jaisalmer": "Sun Temple",
-                "New York": "Eiffel Tower",
-                "London": "Statue of Liberty",
-                "Tokyo": "Big Ben",
-                "Beijing": "Colosseum",
-                "Bangkok": "Christ the Redeemer",
-                "Toronto": "Burj Khalifa",
-                "Dubai": "CN Tower",
-                "Amsterdam": "Petronas Towers",
-                "Cairo": "Leaning Tower of Pisa",
-                "San Francisco": "Mount Fuji",
-                "Berlin": "Niagara Falls",
-                "Barcelona": "Louvre Museum",
-                "Moscow": "Stonehenge",
-                "Seoul": "Sagrada Familia",
-                "Cape Town": "Acropolis",
-                "Riyadh": "Machu Picchu",
-                "Paris": "Taj Mahal",
-                "Dubai Airport": "Moai Statues",
-                "Singapore": "Christchurch Cathedral",
-                "Jakarta": "The Shard",
-                "Vienna": "Blue Mosque",
-                "Kathmandu": "Neuschwanstein Castle",
-                "Los Angeles": "Buckingham Palace",
-                "Mumbai": "Space Needle",
-                "Seoul": "Times Square",
-            }
-            # # Step 2: Map city to landmark
-            # city_to_landmark = {
-            #     "Mumbai": "Gateway of India",
-            #     "Delhi": "India Gate",
-            #     "Hyderabad": "Charminar",
-            #     "Chennai": "Marina Beach",
-            #     "Kolkata": "Howrah Bridge",
-            #     "Bangalore": "Vidhana Soudha",
-            #     "Mysore": "Mysore Palace",
-            #     "Chandigarh": "Rock Garden",
-            #     "Konark": "Sun Temple",
-            #     "Amritsar": "Golden Temple",
-            #     "Agra": "Taj Mahal",
-            #     "Paris": "Eiffel Tower",
-            #     "New York": "Statue of Liberty",
-            #     "London": "Big Ben",
-            #     "Rome": "Colosseum",
-            #     "Sydney": "Sydney Opera House",
-            #     "Rio de Janeiro": "Christ the Redeemer",
-            #     "Dubai": "Burj Khalifa",
-            #     "Toronto": "CN Tower",
-            #     "Kuala Lumpur": "Petronas Towers",
-            #     "Pisa": "Leaning Tower of Pisa",
-            #     "Fujinomiya": "Mount Fuji",
-            #     "Ontario": "Niagara Falls",
-            #     "Wiltshire": "Stonehenge",
-            #     "Barcelona": "Sagrada Familia",
-            #     "Athens": "Acropolis",
-            #     "Cusco": "Machu Picchu",
-            #     "Easter Island": "Moai Statues",
-            #     "Christchurch": "Christchurch Cathedral",
-            #     "Istanbul": "Blue Mosque",
-            #     "Schwangau": "Neuschwanstein Castle",
-            #     "Seattle": "Space Needle"
-            # }
+        conversation = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Mission Brief:\n{mission_brief}\n\nQuestion: {question}"}
+        ]
 
-            landmark = city_to_landmark.get(city)
-            if not landmark:
-                return {"answers": ["Could not determine landmark for city: " + city]}
+        async with aiohttp.ClientSession() as session:
+            while True:
+                response = await self.client.chat.completions.create(
+                    model="gpt-4.1",
+                    messages=conversation,
+                    max_tokens=1000
+                )
+                gpt_reply = response.choices[0].message.content.strip()
+                try:
+                    action = json.loads(gpt_reply)
+                except Exception:
+                    raise ValueError(f"Non-JSON reply from GPT: {gpt_reply}")
 
-            # Step 3: Determine which endpoint to call
-            if landmark == "Gateway of India":
-                endpoint = "getFirstCityFlightNumber"
-            elif landmark == "Taj Mahal":
-                endpoint = "getSecondCityFlightNumber"
-            elif landmark == "Eiffel Tower":
-                endpoint = "getThirdCityFlightNumber"
-            elif landmark == "Big Ben":
-                endpoint = "getFourthCityFlightNumber"
-            else:
-                endpoint = "getFifthCityFlightNumber"
+                if action["action"] == "call_endpoint":
+                    async with session.get(action["endpoint"]) as r:
+                        result = await r.json()
+                    conversation.append({"role": "assistant", "content": gpt_reply})
+                    conversation.append({"role": "user", "content": f"Endpoint returned: {result}"})
 
-            # Step 4: Get flight number from determined endpoint
-            flight_url = f"https://register.hackrx.in/teams/public/flights/{endpoint}"
-            flight_res = requests.get(flight_url)
-            flight_res.raise_for_status()
-            flight_data = flight_res.json()
-            flight_number = flight_data.get('data', {}).get('flightNumber', '')
+                elif action["action"] == "final_answer":
+                    return action["answer"]
 
-            if not flight_number:
-                return {"answers": ["Failed to retrieve flight number from API"]}
-
-            # Step 5: Return the formatted response
-            return {
-                "answers": [
-                    f"Flight Number is {flight_number} from {city}"
-                ]
-            }
-
-        except Exception as e:
-            print(f"Error processing flight number request: {e}")
-            return {"answers": ["Error processing flight number request"]}
+                else:
+                    raise ValueError(f"Unknown action type: {action}")
+    
+    
+    
 
     async def process(self, document_url: str, questions: List[str]) -> Dict:
         """
@@ -671,31 +592,35 @@ class PDFProcessor:
         try:
             if not document_url or not questions:
                 return {"answers": ["Invalid input"]}
+            
+             # Step 1: Download and extract text
+            file_content, filetype = self.download_file(document_url)
+            text = self.extract_text(file_content, filetype)
+
 
             # Handle secret token request case
             if document_url.startswith("https://register.hackrx.in/utils/get-secret-token?"):
                 return {"answers": ["This is not a document, it is a webpage and cannot be processed"]}
 
-                # try:
-                #     response = requests.get(document_url)
-                #     response.raise_for_status()
-                    
-                #     # Extract token from HTML response
-                #     from bs4 import BeautifulSoup
-                #     soup = BeautifulSoup(response.text, 'html.parser')
-                #     token_div = soup.find('div', {'id': 'token'})
-                #     if token_div:
-                #         token = token_div.text.strip()
-                #         return {"Token": f"{token}"}
-                #     return {"Token": ["Could not find token in response"]}
-                # except Exception as e:
-                #     print(f"Error fetching secret token: {e}")
-                #     return {"Token": ["Error fetching secret token"]}
+               
 
             # Special case for FinalRound4SubmissionPDF flight number request
-            if ("FinalRound4SubmissionPDF.pdf" in document_url and 
-                len(questions) == 1 and "flight number" in questions[0].lower()):
-                return await self._get_flight_number_from_finalround(document_url)
+            # if ("FinalRound4SubmissionPDF.pdf" in document_url and 
+            #     len(questions) == 1 and "flight number" in questions[0].lower()):
+            #     return await self._get_flight_number_from_finalround(document_url)
+
+
+
+            #endpoints case
+            if "GET https://" in text or "POST https://" in text:
+                mission_brief = text
+                answers = []
+                for q in questions:
+                    ans = await self.run_doc_with_endpoints(mission_brief, q)
+                    answers.append(ans)
+                return {"answers": answers}
+
+
 
             # First check if it's a zip/bin file
             file_ext = self.get_file_extension(document_url)
@@ -787,3 +712,5 @@ class PDFProcessor:
         except Exception as e:
             print(f"Processing failed: {e}")
             return {"answers": ["Error processing request"]}
+
+   
