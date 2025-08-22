@@ -153,3 +153,11 @@ https://hackrx.blob.core.windows.net/hackrx/rounds/News.pdf?sv=2023-01-03&spr=ht
 ["What was Apple's investment commitment and what was its objective?", 'What impact will this new policy have on consumers and the global market?']
 https://hackrx.blob.core.windows.net/hackrx/rounds/News.pdf?sv=2023-01-03&spr=https&st=2025-08-07T17%3A10%3A11Z&se=2026-08-08T17%3A10%3A00Z&sr=b&sp=r&sig=ybRsnfv%2B6VbxPz5xF7kLLjC4ehU0NF7KDkXua9ujSf0%3D
 ["What was Apple's investment commitment and what was its objective?", 'What impact will this new policy have on consumers and the global market?']
+https://register.hackrx.in/showdown/startChallenge/${base64Token}
+['Go to the website and start the challenge. Complete the challenge and return the answers for the following questions: What is the challenge name?']
+https://register.hackrx.in/showdown/startChallenge/${base64Token}
+['Go to the website and start the challenge. Complete the challenge and return the answers for the following questions: What is the challenge name?']
+https://register.hackrx.in/showdown/startChallenge/${base64Token}
+['Go to the website and start the challenge. Complete the challenge and return the answers for the following questions: What is the challenge name?']
+https://register.hackrx.in/showdown/startChallenge/${base64Token}
+['Go to the website and start the challenge. Complete the challenge and return the answers for the following questions: What is the challenge name?']

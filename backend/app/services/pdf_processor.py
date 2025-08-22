@@ -17,7 +17,6 @@ from qdrant_client.models import (
 )
 from qdrant_client.http import models
 from typing import List, Dict, Optional
-from openai import AsyncOpenAI
 from dotenv import load_dotenv
 load_dotenv()
 import os
@@ -125,6 +124,36 @@ class PDFProcessor:
             return 1
         return max(self.url_to_collection.values()) + 1
 
+    async def _make_llm_call(self, messages: List[Dict], max_tokens: int = 300, temperature: float = 0) -> str:
+        """Make API call to the custom LLM endpoint"""
+        try:
+            headers = {
+                'Content-Type': 'application/json',
+                'x-subscription-key': 'sk-spgw-api01-f56f0931cf85494fd5d291c93e24a3ef'
+            }
+            
+            data = {
+                "messages": messages,
+                "model": "gpt-4.1-nano",
+                "max_tokens": max_tokens,
+                "temperature": temperature
+            }
+            
+            response = requests.post(
+                'https://register.hackrx.in/llm/openai',
+                headers=headers,
+                json=data,
+                timeout=60
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            return result['choices'][0]['message']['content']
+            
+        except Exception as e:
+            print(f"Error making LLM call: {e}")
+            raise
+
     def __init__(self):
         self.cache_path = Path(__file__).parent / self.CACHE_FILE
         self.qa_cache_path = Path(__file__).parent / self.QA_CACHE_FILE
@@ -154,7 +183,6 @@ class PDFProcessor:
         self.next_collection_id = self._get_next_collection_id()
         self.qdrant_client = QdrantClient(url="http://localhost:6333")
         self.collection_name = "document_chunks"
-        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         
         if not hasattr(self, 'tokenizer'):
             from transformers import GPT2TokenizerFast
@@ -165,7 +193,7 @@ class PDFProcessor:
         self._setup_tools()
 
     async def _check_webpage_interaction_needed(self, question: str) -> bool:
-        """Check if the question requires webpage interaction using GPT-3.5"""
+        """Check if the question requires webpage interaction using custom LLM"""
         try:
             prompt = f"""
 Analyze this question to determine if it requires INTERACTIVE operations with a webpage (like clicking buttons, filling forms, navigating, scrolling, submitting data, etc.).
@@ -191,14 +219,10 @@ Return "YES" if the question requires interactive webpage operations.
 Return "NO" if the question only needs to read/extract existing webpage content.
 """
 
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=10,
-                temperature=0
-            )
+            messages = [{"role": "user", "content": prompt}]
+            response = await self._make_llm_call(messages, max_tokens=10, temperature=0)
             
-            decision = response.choices[0].message.content.strip().upper()
+            decision = response.strip().upper()
             print(f"Webpage interaction check for '{question}': {decision}")
             return decision == "YES"
             
@@ -243,6 +267,7 @@ Return "NO" if the question only needs to read/extract existing webpage content.
         try:
             prompt = f"""
 You need to plan interaction steps for a webpage to answer this question: {question}
+Absolutely do only actions that are necessary to find the answer.Be careful to keep in mind the question to be solved at all steps
 
 Page Title: {page_title}
 Page Content (first 5000 chars): {page_content}
@@ -270,14 +295,10 @@ Example format:
 
 Your plan:"""
 
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=500,
-                temperature=0
-            )
+            messages = [{"role": "user", "content": prompt}]
+            response = await self._make_llm_call(messages, max_tokens=500, temperature=0)
             
-            return response.choices[0].message.content.strip()
+            return response.strip()
             
         except Exception as e:
             print(f"Error planning interaction: {e}")
@@ -380,14 +401,10 @@ Provide a clear, concise answer based on the information found.
 If the information is not available, state that clearly.
 """
 
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0
-            )
+            messages = [{"role": "user", "content": prompt}]
+            response = await self._make_llm_call(messages, max_tokens=300, temperature=0)
             
-            return response.choices[0].message.content.strip()
+            return response.strip()
             
         except Exception as e:
             print(f"Error extracting answer from results: {e}")
@@ -662,14 +679,10 @@ Examples:
 
 File type:"""
 
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=10,
-                temperature=0
-            )
+            messages = [{"role": "user", "content": prompt}]
+            response = await self._make_llm_call(messages, max_tokens=10, temperature=0)
             
-            filetype = response.choices[0].message.content.strip().lower()
+            filetype = response.strip().lower()
             
             # Fallback to basic extension parsing if LLM fails
             if not filetype or len(filetype) > 10:
@@ -1002,14 +1015,10 @@ Return "YES" if the document contains instructions requiring dynamic actions (HT
 Return "NO" if questions can be answered from document content alone.
 """
 
-                response = await self.client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=10,
-                    temperature=0
-                )
+                messages = [{"role": "user", "content": prompt}]
+                response = await self._make_llm_call(messages, max_tokens=10, temperature=0)
                 
-                decision = response.choices[0].message.content.strip().upper()
+                decision = response.strip().upper()
                 print(f"LLM analysis decision: {decision}")
                 return decision == "YES"
             
@@ -1174,14 +1183,10 @@ Provide a clear, direct answer based on the information found.
 If the information is not available, state that clearly.
 """
 
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0
-            )
+            messages = [{"role": "user", "content": prompt}]
+            response = await self._make_llm_call(messages, max_tokens=300, temperature=0)
             
-            return response.choices[0].message.content.strip()
+            return response.strip()
             
         except Exception as e:
             print(f"Error processing webpage question: {e}")
@@ -1250,15 +1255,11 @@ If the information is not available, state that clearly.
         prompt = static_prompt_template.replace("{questions_contexts}", questions_contexts)
 
         try:
-            response = await self.client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=4000,
-                temperature=0
-            )
+            messages = [{"role": "user", "content": prompt}]
+            response = await self._make_llm_call(messages, max_tokens=4000, temperature=0)
             
             self.print_elapsed_time("refine_with_llm")
-            formatted_answer = response.choices[0].message.content
+            formatted_answer = response
             batch_answers = json.loads(formatted_answer)
                 
         except Exception as e:
