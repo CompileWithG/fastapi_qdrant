@@ -37,6 +37,7 @@ try:
 except ImportError:
     from langchain.chat_models import ChatOpenAI
 from langchain.tools import tool
+from playwright.async_api import async_playwright
 
 class PDFProcessor:
     CACHE_FILE = "document_cache.json"
@@ -162,6 +163,260 @@ class PDFProcessor:
         self._initialize_embedder()
         self._initialize_qdrant_collection()
         self._setup_tools()
+
+    async def _check_webpage_interaction_needed(self, question: str) -> bool:
+        """Check if the question requires webpage interaction using GPT-3.5"""
+        try:
+            prompt = f"""
+Analyze this question to determine if it requires INTERACTIVE operations with a webpage (like clicking buttons, filling forms, navigating, scrolling, submitting data, etc.).
+
+Question: {question}
+
+Interactive operations include:
+- Clicking buttons, links, or elements
+- Filling out forms or input fields
+- Submitting forms or data
+- Navigating between pages
+- Scrolling to find content
+- Interacting with dynamic content
+- Performing searches on the website
+- Any action that modifies the webpage state
+
+NON-interactive operations (just reading content):
+- Extracting text from a webpage
+- Reading static content
+- Getting information that's already visible
+
+Return "YES" if the question requires interactive webpage operations.
+Return "NO" if the question only needs to read/extract existing webpage content.
+"""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=10,
+                temperature=0
+            )
+            
+            decision = response.choices[0].message.content.strip().upper()
+            print(f"Webpage interaction check for '{question}': {decision}")
+            return decision == "YES"
+            
+        except Exception as e:
+            print(f"Error checking webpage interaction need: {e}")
+            return False
+
+    async def _perform_playwright_interaction(self, url: str, question: str) -> str:
+        """Perform webpage interaction using Playwright with LLM guidance"""
+        try:
+            print(f"Starting Playwright interaction for: {question}")
+            
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context()
+                page = await context.new_page()
+                
+                # Navigate to the page
+                await page.goto(url, wait_until="networkidle")
+                await page.wait_for_timeout(2000)  # Wait for dynamic content
+                
+                # Get initial page analysis
+                page_content = await page.content()
+                page_title = await page.title()
+                
+                # Plan the interaction steps
+                interaction_plan = await self._plan_webpage_interaction(page_content[:5000], page_title, question)
+                print(f"Interaction plan: {interaction_plan}")
+                
+                # Execute the planned steps
+                result = await self._execute_interaction_steps(page, interaction_plan, question)
+                
+                await browser.close()
+                return result
+                
+        except Exception as e:
+            print(f"Error in Playwright interaction: {e}")
+            return f"Error during webpage interaction: {str(e)}"
+
+    async def _plan_webpage_interaction(self, page_content: str, page_title: str, question: str) -> str:
+        """Use LLM to plan the interaction steps"""
+        try:
+            prompt = f"""
+You need to plan interaction steps for a webpage to answer this question: {question}
+
+Page Title: {page_title}
+Page Content (first 5000 chars): {page_content}
+
+Analyze the webpage content and create a step-by-step plan to answer the question.
+Your plan should include specific actions like:
+- click(selector)
+- fill(selector, text)
+- select(selector, value)  
+- scroll()
+- wait(milliseconds)
+- navigate(url)
+- extract_text(selector)
+
+Provide a simple, sequential plan with one action per line.
+Use CSS selectors or text content to identify elements.
+Be specific and practical.
+
+Example format:
+1. click('button[type="submit"]')
+2. fill('#search-input', 'search term')
+3. click('#search-button')
+4. wait(2000)
+5. extract_text('.results')
+
+Your plan:"""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=500,
+                temperature=0
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            print(f"Error planning interaction: {e}")
+            return "1. extract_text('body')"
+
+    async def _execute_interaction_steps(self, page, interaction_plan: str, question: str) -> str:
+        """Execute the planned interaction steps"""
+        try:
+            steps = interaction_plan.split('\n')
+            results = []
+            
+            for step in steps:
+                step = step.strip()
+                if not step or step.startswith('#'):
+                    continue
+                    
+                print(f"Executing step: {step}")
+                
+                try:
+                    if 'click(' in step:
+                        selector = self._extract_selector(step)
+                        element = await page.wait_for_selector(selector, timeout=5000)
+                        await element.click()
+                        await page.wait_for_timeout(1000)
+                        
+                    elif 'fill(' in step:
+                        selector, text = self._extract_fill_params(step)
+                        await page.fill(selector, text)
+                        await page.wait_for_timeout(500)
+                        
+                    elif 'select(' in step:
+                        selector, value = self._extract_select_params(step)
+                        await page.select_option(selector, value)
+                        await page.wait_for_timeout(500)
+                        
+                    elif 'scroll()' in step:
+                        await page.evaluate('window.scrollBy(0, window.innerHeight)')
+                        await page.wait_for_timeout(1000)
+                        
+                    elif 'wait(' in step:
+                        duration = self._extract_wait_duration(step)
+                        await page.wait_for_timeout(duration)
+                        
+                    elif 'navigate(' in step:
+                        url = self._extract_url(step)
+                        await page.goto(url, wait_until="networkidle")
+                        
+                    elif 'extract_text(' in step:
+                        selector = self._extract_selector(step)
+                        try:
+                            elements = await page.query_selector_all(selector)
+                            if elements:
+                                texts = []
+                                for element in elements[:5]:  # Limit to first 5 elements
+                                    text = await element.text_content()
+                                    if text and text.strip():
+                                        texts.append(text.strip())
+                                if texts:
+                                    results.append('\n'.join(texts))
+                            else:
+                                # Fallback to get all text if selector fails
+                                text = await page.text_content('body')
+                                results.append(text[:2000] if text else "No content found")
+                        except:
+                            text = await page.text_content('body')
+                            results.append(text[:2000] if text else "No content found")
+                            
+                except Exception as step_error:
+                    print(f"Step failed: {step}, Error: {step_error}")
+                    continue
+            
+            # If no results from extraction steps, get final page content
+            if not results:
+                final_content = await page.text_content('body')
+                results.append(final_content[:3000] if final_content else "No content extracted")
+            
+            # Use LLM to extract the answer from results
+            combined_results = '\n'.join(results)
+            return await self._extract_answer_from_results(combined_results, question)
+            
+        except Exception as e:
+            print(f"Error executing interaction steps: {e}")
+            # Fallback to basic content extraction
+            try:
+                content = await page.text_content('body')
+                return await self._extract_answer_from_results(content[:3000], question)
+            except:
+                return f"Error executing webpage interaction: {str(e)}"
+
+    async def _extract_answer_from_results(self, results: str, question: str) -> str:
+        """Extract the final answer from interaction results using LLM"""
+        try:
+            prompt = f"""
+Based on the webpage interaction results, provide a direct answer to the question.
+
+Question: {question}
+Webpage Results: {results[:2000]}
+
+Provide a clear, concise answer based on the information found.
+If the information is not available, state that clearly.
+"""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            print(f"Error extracting answer from results: {e}")
+            return results[:500] if results else "No results obtained"
+
+    def _extract_selector(self, step: str) -> str:
+        """Extract CSS selector from step"""
+        match = re.search(r"[\"'](.*?)[\"']", step)
+        return match.group(1) if match else "body"
+
+    def _extract_fill_params(self, step: str) -> tuple:
+        """Extract selector and text from fill step"""
+        parts = re.findall(r"[\"'](.*?)[\"']", step)
+        return parts[0] if parts else "input", parts[1] if len(parts) > 1 else ""
+
+    def _extract_select_params(self, step: str) -> tuple:
+        """Extract selector and value from select step"""
+        parts = re.findall(r"[\"'](.*?)[\"']", step)
+        return parts[0] if parts else "select", parts[1] if len(parts) > 1 else ""
+
+    def _extract_wait_duration(self, step: str) -> int:
+        """Extract wait duration from step"""
+        match = re.search(r"wait\((\d+)\)", step)
+        return int(match.group(1)) if match else 1000
+
+    def _extract_url(self, step: str) -> str:
+        """Extract URL from navigate step"""
+        match = re.search(r"[\"'](.*?)[\"']", step)
+        return match.group(1) if match else ""
 
     def _setup_tools(self):
         """Setup tools for LLM function calling - compatible with ZeroShotAgent"""
@@ -385,63 +640,55 @@ class PDFProcessor:
             print(f"Error clearing Qdrant collection: {e}")
 
     async def get_file_extension(self, url: str) -> str:
-        """Determine file type from URL using parsing only"""
+        """Use lightweight LLM to determine file type from URL"""
         try:
+            prompt = f"""
+Given this URL, determine what type of file it points to. Consider the URL structure, path, and any file extensions.
+
+URL: {url}
+
+Return ONLY the file type as a lowercase string without any punctuation or explanation. Common file types include:
+- pdf, docx, doc, eml, ppt, pptx, jpg, jpeg, png, txt, csv, xlsx, zip, bin, rar, tar, gz
+- webpage (if the URL doesn't point to a specific document file but is a webpage)
+
+Examples:
+- https://example.com/document.pdf -> pdf
+- https://example.com/report.docx -> docx
+- https://example.com/image.jpg -> jpg
+- https://example.com/data.zip -> zip
+- https://example.com/page -> webpage
+- https://example.com/ -> webpage
+- https://example.com/about -> webpage
+
+File type:"""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=10,
+                temperature=0
+            )
+            
+            filetype = response.choices[0].message.content.strip().lower()
+            
+            # Fallback to basic extension parsing if LLM fails
+            if not filetype or len(filetype) > 10:
+                parsed = urllib.parse.urlparse(url)
+                path = parsed.path
+                filetype = os.path.splitext(path)[1].lower().lstrip('.')
+                if not filetype:
+                    filetype = 'webpage'
+            
+            return filetype
+            
+        except Exception as e:
+            print(f"Error determining file type with LLM: {e}")
             parsed = urllib.parse.urlparse(url)
             path = parsed.path
-            
-            # Get file extension
             filetype = os.path.splitext(path)[1].lower().lstrip('.')
-            
-            # Common document file extensions
-            document_extensions = {
-                'pdf', 'docx', 'doc', 'eml', 'ppt', 'pptx', 'txt', 
-                'csv', 'xlsx', 'xls', 'rtf', 'odt', 'ods', 'odp'
-            }
-            
-            # Image file extensions
-            image_extensions = {
-                'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'svg', 'webp'
-            }
-            
-            # Archive/compressed file extensions
-            archive_extensions = {
-                'zip', 'rar', 'tar', 'gz', '7z', 'bz2', 'xz'
-            }
-            
-            # Binary/executable file extensions
-            binary_extensions = {
-                'bin', 'exe', 'dll', 'so', 'dmg', 'pkg', 'deb', 'rpm'
-            }
-            
-            # Check if it's a common file type
-            if filetype in document_extensions | image_extensions | archive_extensions | binary_extensions:
-                return filetype
-            
-            # Check if URL has query parameters or ends with common webpage patterns
-            if (not filetype or 
-                parsed.query or 
-                url.endswith('/') or 
-                not any(char in path for char in ['.', '/']) or
-                any(path.endswith(x) for x in ['', '.html', '.htm', '.php', '.asp', '.aspx', '.jsp'])):
-                return 'webpage'
-            
-            # If we have an extension but it's not in our known lists, return it anyway
-            if filetype:
-                return filetype
-            
-            # Default to webpage
-            return 'webpage'
-                
-        except Exception as e:
-            print(f"Error determining file type: {e}")
-            # Fallback parsing
-            try:
-                path = urllib.parse.urlparse(url).path
-                filetype = os.path.splitext(path)[1].lower().lstrip('.')
-                return filetype if filetype else 'webpage'
-            except:
-                return 'webpage'
+            if not filetype:
+                filetype = 'webpage'
+            return filetype
 
     async def download_file(self, url: str) -> tuple:
         """Download file and return (content, filetype)"""
@@ -694,9 +941,19 @@ class PDFProcessor:
         """Determine if the agent approach should be used based on document content and questions"""
         try:
             file_ext = await self.get_file_extension(document_url)
+            
+            # NEW: Check if it's a webpage and if questions need interaction
             if file_ext == 'webpage':
-                print("Webpage detected - using agent approach")
-                return True
+                print("Webpage detected - checking if interaction is needed")
+                
+                # Check each question to see if webpage interaction is needed
+                for question in questions:
+                    if await self._check_webpage_interaction_needed(question):
+                        print(f"Webpage interaction needed for question: {question}")
+                        return True
+                
+                print("No webpage interaction needed - using standard approach")
+                return True  # Still use agent approach for webpages, but without Playwright
             
             if document_url in self.dynamic_docs_cache and self.dynamic_docs_cache[document_url]:
                 print("Document already marked as dynamic - using agent approach")
@@ -778,11 +1035,33 @@ Return "NO" if questions can be answered from document content alone.
             return False
 
     async def _process_with_agent(self, document_url: str, questions: List[str]) -> Dict:
-        """Process using LLM agent with function calling"""
+        """Process using LLM agent with function calling or Playwright interaction"""
         try:
+            file_ext = await self.get_file_extension(document_url)
+            
+            # NEW: Check if this is a webpage that needs interaction
+            if file_ext == 'webpage':
+                # Check if any question needs webpage interaction
+                needs_interaction = False
+                interactive_results = []
+                
+                for question in questions:
+                    if await self._check_webpage_interaction_needed(question):
+                        print(f"Using Playwright for interactive question: {question}")
+                        result = await self._perform_playwright_interaction(document_url, question)
+                        interactive_results.append(result)
+                        needs_interaction = True
+                    else:
+                        # Use standard HTTP approach for non-interactive questions
+                        print(f"Using standard HTTP approach for: {question}")
+                        result = await self._process_webpage_question_standard(document_url, question)
+                        interactive_results.append(result)
+                
+                if needs_interaction:
+                    return {"answers": interactive_results}
+            
             print("Using agent-based approach for processing...")
             
-            file_ext = await self.get_file_extension(document_url)
             self.dynamic_docs_cache[document_url] = True
             self._save_dynamic_docs_cache()
             print(f"Marked document as dynamic: {document_url}")
@@ -874,6 +1153,39 @@ For extract_from_html, use format: 'HTML_CONTENT|||ELEMENT_TYPE|||ELEMENT_ID|||E
         except Exception as e:
             print(f"Error in agent processing: {e}")
             return {"answers": ["Error in agent processing" for _ in questions]}
+
+    async def _process_webpage_question_standard(self, url: str, question: str) -> str:
+        """Process webpage question using standard HTTP approach"""
+        try:
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            page_text = soup.get_text(strip=True)
+            
+            # Use LLM to extract answer from page content
+            prompt = f"""
+Based on the webpage content, answer the question.
+
+Question: {question}
+Webpage Content: {page_text[:3000]}
+
+Provide a clear, direct answer based on the information found.
+If the information is not available, state that clearly.
+"""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            print(f"Error processing webpage question: {e}")
+            return f"Error processing webpage question: {str(e)}"
 
     async def refine_with_deepseek(self) -> Dict:
         """Use GPT-4 to generate answers - SIMPLIFIED FOR STATIC DOCUMENTS"""
