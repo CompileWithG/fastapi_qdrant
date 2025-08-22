@@ -385,55 +385,63 @@ class PDFProcessor:
             print(f"Error clearing Qdrant collection: {e}")
 
     async def get_file_extension(self, url: str) -> str:
-        """Use lightweight LLM to determine file type from URL"""
+        """Determine file type from URL using parsing only"""
         try:
-            prompt = f"""
-Given this URL, determine what type of file it points to. Consider the URL structure, path, and any file extensions.
-
-URL: {url}
-
-Return ONLY the file type as a lowercase string without any punctuation or explanation. Common file types include:
-- pdf, docx, doc, eml, ppt, pptx, jpg, jpeg, png, txt, csv, xlsx, zip, bin, rar, tar, gz
-- webpage (if the URL doesn't point to a specific document file but is a webpage)
-
-Examples:
-- https://example.com/document.pdf -> pdf
-- https://example.com/report.docx -> docx
-- https://example.com/image.jpg -> jpg
-- https://example.com/data.zip -> zip
-- https://example.com/page -> webpage
-- https://example.com/ -> webpage
-- https://example.com/about -> webpage
-
-File type:"""
-
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=10,
-                temperature=0
-            )
-            
-            filetype = response.choices[0].message.content.strip().lower()
-            
-            # Fallback to basic extension parsing if LLM fails
-            if not filetype or len(filetype) > 10:
-                parsed = urllib.parse.urlparse(url)
-                path = parsed.path
-                filetype = os.path.splitext(path)[1].lower().lstrip('.')
-                if not filetype:
-                    filetype = 'webpage'
-            
-            return filetype
-            
-        except Exception as e:
-            print(f"Error determining file type with LLM: {e}")
             parsed = urllib.parse.urlparse(url)
             path = parsed.path
+            
+            # Get file extension
             filetype = os.path.splitext(path)[1].lower().lstrip('.')
-            if not filetype:
-                filetype = 'webpage'
-            return filetype
+            
+            # Common document file extensions
+            document_extensions = {
+                'pdf', 'docx', 'doc', 'eml', 'ppt', 'pptx', 'txt', 
+                'csv', 'xlsx', 'xls', 'rtf', 'odt', 'ods', 'odp'
+            }
+            
+            # Image file extensions
+            image_extensions = {
+                'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'svg', 'webp'
+            }
+            
+            # Archive/compressed file extensions
+            archive_extensions = {
+                'zip', 'rar', 'tar', 'gz', '7z', 'bz2', 'xz'
+            }
+            
+            # Binary/executable file extensions
+            binary_extensions = {
+                'bin', 'exe', 'dll', 'so', 'dmg', 'pkg', 'deb', 'rpm'
+            }
+            
+            # Check if it's a common file type
+            if filetype in document_extensions | image_extensions | archive_extensions | binary_extensions:
+                return filetype
+            
+            # Check if URL has query parameters or ends with common webpage patterns
+            if (not filetype or 
+                parsed.query or 
+                url.endswith('/') or 
+                not any(char in path for char in ['.', '/']) or
+                any(path.endswith(x) for x in ['', '.html', '.htm', '.php', '.asp', '.aspx', '.jsp'])):
+                return 'webpage'
+            
+            # If we have an extension but it's not in our known lists, return it anyway
+            if filetype:
+                return filetype
+            
+            # Default to webpage
+            return 'webpage'
+                
+        except Exception as e:
+            print(f"Error determining file type: {e}")
+            # Fallback parsing
+            try:
+                path = urllib.parse.urlparse(url).path
+                filetype = os.path.splitext(path)[1].lower().lstrip('.')
+                return filetype if filetype else 'webpage'
+            except:
+                return 'webpage'
 
     async def download_file(self, url: str) -> tuple:
         """Download file and return (content, filetype)"""

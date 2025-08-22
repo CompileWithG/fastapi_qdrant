@@ -149,3 +149,7 @@ https://hackrx.blob.core.windows.net/hackrx/rounds/News.pdf?sv=2023-01-03&spr=ht
 ['ട്രംപ് ഏത് ദിവസമാണ് 100% ശുൽകം പ്രഖ്യാപിച്ചത്?', 'ഏത് ഉത്പന്നങ്ങൾക്ക് ഈ 100% ഇറക്കുമതി ശുൽകം ബാധകമാണ്?', 'ഏത് സാഹചര്യത്തിൽ ഒരു കമ്പനിയ്ക്ക് ഈ 100% ശുൽകത്തിൽ നിന്നും ഒഴികെയാക്കും?', "What was Apple's investment commitment and what was its objective?", 'What impact will this new policy have on consumers and the global market?']
 
 ['യുഎസിൽ നിർമ്മിക്കാൻ പ്രതിജ്ഞാബദ്ധരായ കമ്പനികൾക്ക് ഈ 100% ശുൽകത്തിൽ നിന്നും ഒഴിവാക്കും, കാരണം അമേരിക്കൻ അന്തർസ്ഥാപന നിർമ്മാണം പ്രോത്സാഹിപ്പിക്കുകയും വിദേശ ആശ്രിതത്വം കുറയ്ക്കുകയും ചെയ്യുന്നതാണ് ഈ നടപടിയുടെ ലക്ഷ്യം എന്നും രേഖയിൽ വ്യക്തമാക്കുന്നു.', 'Apple announced an upcoming investment commitment of 600 billion dollars, with the objective of boosting American domestic manufacturing and reducing dependency on foreign sources, as stated in the context.']
+https://hackrx.blob.core.windows.net/hackrx/rounds/News.pdf?sv=2023-01-03&spr=https&st=2025-08-07T17%3A10%3A11Z&se=2026-08-08T17%3A10%3A00Z&sr=b&sp=r&sig=ybRsnfv%2B6VbxPz5xF7kLLjC4ehU0NF7KDkXua9ujSf0%3D
+["What was Apple's investment commitment and what was its objective?", 'What impact will this new policy have on consumers and the global market?']
+https://hackrx.blob.core.windows.net/hackrx/rounds/News.pdf?sv=2023-01-03&spr=https&st=2025-08-07T17%3A10%3A11Z&se=2026-08-08T17%3A10%3A00Z&sr=b&sp=r&sig=ybRsnfv%2B6VbxPz5xF7kLLjC4ehU0NF7KDkXua9ujSf0%3D
+["What was Apple's investment commitment and what was its objective?", 'What impact will this new policy have on consumers and the global market?']
